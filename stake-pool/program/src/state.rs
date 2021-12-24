@@ -851,7 +851,7 @@ impl FeeType {
 
 /// Exchange rate for SOL deposit and withdraw
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, BorshSerialize, BorshDeserialize, BorshSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, BorshSerialize, BorshDeserialize, BorshSchema)]
 pub struct RateOfExchange {
     /// denominator of the fee ratio, total supply of pool tokens
     pub denominator: u64,
