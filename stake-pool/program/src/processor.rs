@@ -22,6 +22,7 @@ use {
         decode_error::DecodeError,
         entrypoint::ProgramResult,
         msg,
+        native_token::LAMPORTS_PER_SOL,
         program::{invoke, invoke_signed},
         program_error::PrintProgramError,
         program_error::ProgramError,
@@ -33,6 +34,9 @@ use {
     },
     spl_token::state::Mint,
 };
+
+/// Minimum deposit
+pub const MINIMUM_DEPOSIT: u64 = LAMPORTS_PER_SOL / 1000;
 
 /// Deserialize the stake state from AccountInfo
 fn get_stake_state(
@@ -2009,6 +2013,11 @@ impl Processor {
         let total_deposit_lamports = post_all_validator_lamports
             .checked_sub(pre_all_validator_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
+
+        if total_deposit_lamports < MINIMUM_DEPOSIT {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
         let stake_deposit_lamports = post_validator_stake
             .delegation
             .stake
@@ -2180,6 +2189,10 @@ impl Processor {
 
         if stake_pool.manager_fee_account != *manager_fee_info.key {
             return Err(StakePoolError::InvalidFeeAccount.into());
+        }
+
+        if deposit_lamports < MINIMUM_DEPOSIT {
+            return Err(StakePoolError::DepositTooSmall.into());
         }
 
         let new_pool_tokens = stake_pool
