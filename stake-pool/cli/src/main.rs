@@ -1770,6 +1770,105 @@ fn command_list_all_pools(config: &Config) -> CommandResult {
     Ok(())
 }
 
+fn command_deposit_liquidity_sol(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    from: &Option<Keypair>,
+    amount: f64,
+) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+
+    let amount = native_token::sol_to_lamports(amount);
+
+    // Check withdraw_from balance
+    let from_pubkey = from
+        .as_ref()
+        .map_or_else(|| config.fee_payer.pubkey(), |keypair| keypair.pubkey());
+    let from_balance = config.rpc_client.get_balance(&from_pubkey)?;
+    if from_balance < amount {
+        return Err(format!(
+            "Not enough SOL to deposit into pool: {}.\nMaximum deposit amount is {} SOL.",
+            Sol(amount),
+            Sol(from_balance)
+        )
+        .into());
+    }
+
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+
+    let mut instructions: Vec<Instruction> = vec![];
+
+    // ephemeral SOL account just to do the transfer
+    let user_sol_transfer = Keypair::new();
+    let mut signers = vec![config.fee_payer.as_ref(), &user_sol_transfer, config.manager.as_ref()];
+    if let Some(keypair) = from.as_ref() {
+        signers.push(keypair)
+    }
+
+    // Create the ephemeral SOL account
+    instructions.push(system_instruction::transfer(
+        &from_pubkey,
+        &user_sol_transfer.pubkey(),
+        amount,
+    ));
+
+    let pool_withdraw_authority =
+        find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
+
+    let deposit_instruction = if let Some(deposit_authority) = config.funding_authority.as_ref() {
+        let expected_sol_deposit_authority = stake_pool.sol_deposit_authority.ok_or_else(|| {
+            "SOL deposit authority specified in arguments but stake pool has none".to_string()
+        })?;
+        signers.push(deposit_authority.as_ref());
+        if deposit_authority.pubkey() != expected_sol_deposit_authority {
+            let error = format!(
+                "Invalid deposit authority specified, expected {}, received {}",
+                expected_sol_deposit_authority,
+                deposit_authority.pubkey()
+            );
+            return Err(error.into());
+        }
+
+        spl_stake_pool::instruction::deposit_liquidity_sol_with_authority(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &config.manager.pubkey(),
+            &deposit_authority.pubkey(),
+            &pool_withdraw_authority,
+            &stake_pool.reserve_stake,
+            &user_sol_transfer.pubkey(),
+            amount,
+        )
+    } else {
+        spl_stake_pool::instruction::deposit_liquidity_sol(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &config.manager.pubkey(),
+            &pool_withdraw_authority,
+            &stake_pool.reserve_stake,
+            &user_sol_transfer.pubkey(),
+            amount,
+        )
+    };
+
+    instructions.push(deposit_instruction);
+
+    let mut transaction =
+        Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
+
+    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
+    check_fee_payer_balance(
+        config,
+        fee_calculator.calculate_fee(transaction.message()),
+    )?;
+    unique_signers!(signers);
+    transaction.sign(&signers, recent_blockhash);
+    send_transaction(config, transaction)?;
+    Ok(())
+}
+
 fn main() {
     solana_logger::setup_with_default("solana=info");
 
@@ -2628,6 +2727,33 @@ fn main() {
         .subcommand(SubCommand::with_name("list-all")
             .about("List information about all stake pools")
         )
+        .subcommand(SubCommand::with_name("deposit-liquidity-sol")
+            .about("Deposit SOL into the stake pool liquidity")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            ).arg(
+                Arg::with_name("amount")
+                    .index(2)
+                    .validator(is_amount)
+                    .value_name("AMOUNT")
+                    .takes_value(true)
+                    .help("Amount in SOL to deposit into the stake pool reserve account."),
+            )
+            .arg(
+                Arg::with_name("from")
+                    .long("from")
+                    .validator(is_valid_signer)
+                    .value_name("KEYPAIR")
+                    .takes_value(true)
+                    .help("Source account of funds. [default: cli config keypair]"),
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -3009,6 +3135,17 @@ fn main() {
                 withdraw_authority,
                 &token_receiver,
                 &referrer,
+            )
+        }
+        ("deposit-liquidity-sol", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let from = keypair_of(arg_matches, "from");
+            let amount = value_t_or_exit!(arg_matches, "amount", f64);
+            command_deposit_liquidity_sol(
+                &config,
+                &stake_pool_address,
+                &from,
+                amount,
             )
         }
         _ => unreachable!(),

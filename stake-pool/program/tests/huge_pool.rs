@@ -93,6 +93,7 @@ async fn setup(
         treasury_fee: Fee::default(),
         validator_fee_account: stake_pool_accounts.validator_fee_account.pubkey(),
         validator_fee: Fee::default(),
+        total_lamports_liquidity: 0
     };
 
     let mut validator_list = ValidatorList::new(max_validators);

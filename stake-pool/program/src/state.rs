@@ -167,6 +167,9 @@ pub struct StakePool {
 
     /// Fee assessed on taking rewards for validators
     pub validator_fee: Fee,
+
+    /// Total liquidity in Sol equivalent under management.
+    pub total_lamports_liquidity: u64,
 }
 impl StakePool {
     /// calculate the pool tokens that should be minted from lamports
@@ -271,6 +274,12 @@ impl StakePool {
         let fee_lamports = self.validator_fee.apply(reward_lamports)?;
 
         self.convert_amount_of_lamports_to_amount_of_pool_tokens(u64::try_from(fee_lamports).ok()?)
+    }
+
+    /// Calculate total lamports wich should take rewards
+    #[inline]
+    pub fn calc_active_total_lamports(&self) -> Option<u64> {
+        self.total_lamports.checked_sub(self.total_lamports_liquidity)
     }
 
     /// Checks that the withdraw or deposit authority is valid

@@ -739,6 +739,7 @@ impl Processor {
         stake_pool.treasury_fee = treasury_fee;
         stake_pool.validator_fee_account = *validator_fee_info.key;
         stake_pool.validator_fee = validator_fee;
+        stake_pool.total_lamports_liquidity = 0;
 
         let pool_tokens_minted = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(total_lamports)
@@ -1830,15 +1831,18 @@ impl Processor {
             let pool_mint = Mint::unpack_from_slice(&pool_mint_info.data.borrow())?;
             stake_pool.pool_token_supply = pool_mint.supply;
 
-            stake_pool.rate_of_exchange = if stake_pool.total_lamports == stake_pool.pool_token_supply    // TODO  TODO TODO TODO TODO Если 1 лампорт и 2 токена !!!!!!!!!!!!!!!!!
+            let active_total_lamports = stake_pool
+                .calc_active_total_lamports()
+                .ok_or(StakePoolError::CalculationFailure)?;
+            stake_pool.rate_of_exchange = if active_total_lamports == stake_pool.pool_token_supply    // TODO  TODO TODO TODO TODO Если 1 лампорт и 2 токена !!!!!!!!!!!!!!!!!
             || stake_pool.pool_token_supply == 0
-            || stake_pool.total_lamports == 0
+            || active_total_lamports == 0
             {
                 None
             } else {
                 Some(RateOfExchange {
                     denominator: stake_pool.pool_token_supply,
-                    numerator: stake_pool.total_lamports,
+                    numerator: active_total_lamports,
                 })
             };
 
@@ -2785,6 +2789,69 @@ impl Processor {
         Ok(())
     }
 
+    /// Processes [DepositLiquiditySol](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_deposit_liquidity_sol(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        deposit_lamports: u64,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let reserve_stake_account_info = next_account_info(account_info_iter)?;
+        let from_user_lamports_info = next_account_info(account_info_iter)?;
+        let system_program_info = next_account_info(account_info_iter)?;
+        let sol_deposit_authority_info = next_account_info(account_info_iter);
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+        stake_pool.check_sol_deposit_authority(sol_deposit_authority_info)?;
+        stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+
+        stake_pool.check_manager(manager_info)?;
+
+        check_system_program(system_program_info.key)?;
+
+        if deposit_lamports < MINIMUM_DEPOSIT {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
+        Self::sol_transfer(
+            from_user_lamports_info.clone(),
+            reserve_stake_account_info.clone(),
+            system_program_info.clone(),
+            deposit_lamports,
+        )?;
+
+        stake_pool.total_lamports = stake_pool
+            .total_lamports
+            .checked_add(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.total_lamports_liquidity = stake_pool
+            .total_lamports_liquidity
+            .checked_add(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
     /// Processes [Instruction](enum.Instruction.html).
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = StakePoolInstruction::try_from_slice(input)?;
@@ -2906,6 +2973,10 @@ impl Processor {
             StakePoolInstruction::WithdrawSol(pool_tokens) => {
                 msg!("Instruction: WithdrawSol");
                 Self::process_withdraw_sol(program_id, accounts, pool_tokens)
+            }
+            StakePoolInstruction::DepositLiquiditySol(lamports) => {
+                msg!("Instruction: DepositLiquiditySol");
+                Self::process_deposit_liquidity_sol(program_id, accounts, lamports)
             }
         }
     }
