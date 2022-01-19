@@ -43,12 +43,14 @@ async fn test_name_service() {
         None,
     );
 
+    let space = 1_000usize;
+    let rent = ctx.banks_client.get_rent().await.unwrap();
     let create_name_instruction = create(
         program_id,
         NameRegistryInstruction::Create {
             hashed_name: hashed_root_name,
-            lamports: 1_000_000,
-            space: 1_000,
+            lamports: rent.minimum_balance(space + NameRecordHeader::LEN),
+            space: space as u32,
         },
         root_name_account_key,
         ctx.payer.pubkey(),
@@ -91,8 +93,8 @@ async fn test_name_service() {
         program_id,
         NameRegistryInstruction::Create {
             hashed_name,
-            lamports: 1_000_000,
-            space: 1_000,
+            lamports: rent.minimum_balance(space + NameRecordHeader::LEN),
+            space: space as u32,
         },
         name_account_key,
         ctx.payer.pubkey(),
@@ -201,5 +203,9 @@ pub async fn sign_send_instruction(
         payer_signers.push(s);
     }
     transaction.partial_sign(&payer_signers, ctx.last_blockhash);
-    ctx.banks_client.process_transaction(transaction).await
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+    ctx.banks_client
+        .process_transaction(transaction)
+        .await
+        .map_err(|e| e.into())
 }

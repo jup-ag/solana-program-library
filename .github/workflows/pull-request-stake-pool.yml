@@ -23,7 +23,6 @@ jobs:
           echo "RUST_STABLE=$rust_stable" >> $GITHUB_ENV
           source ci/solana-version.sh
           echo "SOLANA_VERSION=$solana_version" >> $GITHUB_ENV
-
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: ${{ env.RUST_STABLE }}
@@ -53,7 +52,6 @@ jobs:
           ./ci/install-build-deps.sh
           ./ci/install-program-deps.sh
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
-
       - name: Build and test
         run: ./ci/cargo-test-bpf.sh stake-pool
 
@@ -64,26 +62,50 @@ jobs:
           path: "target/deploy/*.so"
           if-no-files-found: error
 
-  # py-test:
-  #   runs-on: ubuntu-latest
-  #   needs: cargo-test-bpf
-  #   steps:
-  #     - uses: actions/checkout@v2
+  js-test:
+    runs-on: ubuntu-latest
+    env:
+      NODE_VERSION: 16.x
+    needs: cargo-test-bpf
+    steps:
+      - uses: actions/checkout@v2
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/cache@v2
+        with:
+          path: ~/.npm
+          key: node-${{ hashFiles('stake-pool/js/package-lock.json') }}
+          restore-keys: |
+            node-
+      - name: Download programs
+        uses: actions/download-artifact@v2
+        with:
+          name: stake-pool-programs
+          path: target/deploy
+      - run: ./ci/js-test-stake-pool.sh
 
-  #     - name: Setup Python version
-  #       uses: actions/setup-python@v2
-  #       with:
-  #         python-version: 3.8
+  py-test:
+    runs-on: ubuntu-latest
+    needs: cargo-test-bpf
+    steps:
+      - uses: actions/checkout@v2
 
-  #     - uses: actions/cache@v2
-  #       with:
-  #         path: ~/.cache/pip
-  #         key: pip-stake-pool-${{ hashFiles('stake-pool/py/requirements.txt') }}
+      - name: Setup Python version
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
 
-  #     - name: Download programs
-  #       uses: actions/download-artifact@v2
-  #       with:
-  #         name: stake-pool-programs
-  #         path: target/deploy
+      - uses: actions/cache@v2
+        with:
+          path: ~/.cache/pip
+          key: pip-stake-pool-${{ hashFiles('stake-pool/py/requirements.txt') }}
 
-  #     - run: ./ci/py-test-stake-pool.sh
+      - name: Download programs
+        uses: actions/download-artifact@v2
+        with:
+          name: stake-pool-programs
+          path: target/deploy
+
+      - run: ./ci/py-test-stake-pool.sh

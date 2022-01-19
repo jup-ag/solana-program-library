@@ -79,8 +79,11 @@ pub async fn create_mint(
         Some(&payer.pubkey()),
     );
     transaction.sign(&[payer, pool_mint], *recent_blockhash);
-    banks_client.process_transaction(transaction).await?;
-    Ok(())
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+    banks_client
+        .process_transaction(transaction)
+        .await
+        .map_err(|e| e.into())
 }
 
 pub async fn transfer(
@@ -160,8 +163,11 @@ pub async fn create_token_account(
         Some(&payer.pubkey()),
     );
     transaction.sign(&[payer, account], *recent_blockhash);
-    banks_client.process_transaction(transaction).await?;
-    Ok(())
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+    banks_client
+        .process_transaction(transaction)
+        .await
+        .map_err(|e| e.into())
 }
 
 pub async fn close_token_account(
@@ -184,8 +190,11 @@ pub async fn close_token_account(
         Some(&payer.pubkey()),
     );
     transaction.sign(&[payer, manager], *recent_blockhash);
-    banks_client.process_transaction(transaction).await?;
-    Ok(())
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+    banks_client
+        .process_transaction(transaction)
+        .await
+        .map_err(|e| e.into())
 }
 
 pub async fn freeze_token_account(
@@ -208,8 +217,11 @@ pub async fn freeze_token_account(
         Some(&payer.pubkey()),
     );
     transaction.sign(&[payer, manager], *recent_blockhash);
-    banks_client.process_transaction(transaction).await?;
-    Ok(())
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+    banks_client
+        .process_transaction(transaction)
+        .await
+        .map_err(|e| e.into())
 }
 
 pub async fn mint_tokens(
@@ -235,8 +247,11 @@ pub async fn mint_tokens(
         &[payer, mint_authority],
         *recent_blockhash,
     );
-    banks_client.process_transaction(transaction).await?;
-    Ok(())
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+    banks_client
+        .process_transaction(transaction)
+        .await
+        .map_err(|e| e.into())
 }
 
 pub async fn burn_tokens(
@@ -262,8 +277,11 @@ pub async fn burn_tokens(
         &[payer, authority],
         *recent_blockhash,
     );
-    banks_client.process_transaction(transaction).await?;
-    Ok(())
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+    banks_client
+        .process_transaction(transaction)
+        .await
+        .map_err(|e| e.into())
 }
 
 pub async fn get_token_balance(banks_client: &mut BanksClient, token: &Pubkey) -> u64 {
@@ -396,8 +414,11 @@ pub async fn create_stake_pool(
         signers.push(stake_deposit_authority);
     }
     transaction.sign(&signers, *recent_blockhash);
-    banks_client.process_transaction(transaction).await?;
-    Ok(())
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+    banks_client
+        .process_transaction(transaction)
+        .await
+        .map_err(|e| e.into())
 }
 
 pub async fn create_vote(
@@ -413,7 +434,7 @@ pub async fn create_vote(
     let mut instructions = vec![system_instruction::create_account(
         &payer.pubkey(),
         &validator.pubkey(),
-        42,
+        rent.minimum_balance(0),
         0,
         &system_program::id(),
     )];
@@ -872,7 +893,12 @@ impl StakePoolAccounts {
             &signers,
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -923,7 +949,12 @@ impl StakePoolAccounts {
             &signers,
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -959,7 +990,12 @@ impl StakePoolAccounts {
             &[payer, user_transfer_authority],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1011,7 +1047,12 @@ impl StakePoolAccounts {
             &signers,
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     pub async fn get_validator_list(&self, banks_client: &mut BanksClient) -> ValidatorList {
@@ -1044,7 +1085,12 @@ impl StakePoolAccounts {
             &[payer],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     pub async fn update_stake_pool_balance(
@@ -1070,7 +1116,12 @@ impl StakePoolAccounts {
             &[payer],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     pub async fn cleanup_removed_validator_entries(
@@ -1089,7 +1140,12 @@ impl StakePoolAccounts {
             &[payer],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     pub async fn update_all(
@@ -1136,7 +1192,12 @@ impl StakePoolAccounts {
             &[payer],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     pub async fn add_validator_to_pool(
@@ -1162,7 +1223,12 @@ impl StakePoolAccounts {
             &[payer, &self.staker],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1201,7 +1267,12 @@ impl StakePoolAccounts {
             &[payer, &self.staker, destination_stake],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1231,7 +1302,12 @@ impl StakePoolAccounts {
             &[payer, &self.staker],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1262,7 +1338,12 @@ impl StakePoolAccounts {
             &[payer, &self.staker],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 
     pub async fn set_preferred_validator(
@@ -1286,7 +1367,12 @@ impl StakePoolAccounts {
             &[payer, &self.staker],
             *recent_blockhash,
         );
-        banks_client.process_transaction(transaction).await.err()
+        #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
+        banks_client
+            .process_transaction(transaction)
+            .await
+            .map_err(|e| e.into())
+            .err()
     }
 }
 

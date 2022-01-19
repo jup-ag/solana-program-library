@@ -97,7 +97,7 @@ async fn fail_double_initialize() {
         .await
         .unwrap();
 
-    let latest_blockhash = banks_client.get_recent_blockhash().await.unwrap();
+    let latest_blockhash = banks_client.get_latest_blockhash().await.unwrap();
 
     let mut second_stake_pool_accounts = StakePoolAccounts::new();
     second_stake_pool_accounts.stake_pool = stake_pool_accounts.stake_pool;
@@ -128,7 +128,7 @@ async fn fail_with_already_initialized_validator_list() {
         .await
         .unwrap();
 
-    let latest_blockhash = banks_client.get_recent_blockhash().await.unwrap();
+    let latest_blockhash = banks_client.get_latest_blockhash().await.unwrap();
 
     let mut second_stake_pool_accounts = StakePoolAccounts::new();
     second_stake_pool_accounts.validator_list = stake_pool_accounts.validator_list;
@@ -345,11 +345,13 @@ async fn fail_with_wrong_max_validators() {
         ],
         recent_blockhash,
     );
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
     let transaction_error = banks_client
         .process_transaction(transaction)
         .await
         .err()
-        .unwrap();
+        .unwrap()
+        .into();
 
     match transaction_error {
         TransportError::TransactionError(TransactionError::InstructionError(
@@ -674,11 +676,13 @@ async fn fail_with_wrong_token_program_id() {
         ],
         recent_blockhash,
     );
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
     let transaction_error = banks_client
         .process_transaction(transaction)
         .await
         .err()
-        .unwrap();
+        .unwrap()
+        .into();
 
     match transaction_error {
         TransportError::TransactionError(TransactionError::InstructionError(_, error)) => {
@@ -803,11 +807,13 @@ async fn fail_with_fee_owned_by_wrong_token_program_id() {
         ],
         recent_blockhash,
     );
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
     let transaction_error = banks_client
         .process_transaction(transaction)
         .await
         .err()
-        .unwrap();
+        .unwrap()
+        .into();
 
     match transaction_error {
         TransportError::TransactionError(TransactionError::InstructionError(_, error)) => {
@@ -1183,11 +1189,13 @@ async fn fail_without_manager_signature() {
         ],
         recent_blockhash,
     );
+    #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
     let transaction_error = banks_client
         .process_transaction(transaction)
         .await
         .err()
-        .unwrap();
+        .unwrap()
+        .into();
 
     match transaction_error {
         TransportError::TransactionError(TransactionError::InstructionError(
