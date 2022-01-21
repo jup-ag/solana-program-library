@@ -1307,6 +1307,14 @@ impl Processor {
         }
 
         let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeState>());
+
+        if let None = reserve_stake_account_info
+            .lamports()
+            .saturating_sub(stake_rent)
+            .checked_sub(stake_pool.total_lamports_liquidity) {
+            return Err(StakePoolError::SolLessThanLiquiditySol.into());
+        }
+
         if lamports < MINIMUM_ACTIVE_STAKE {
             msg!(
                 "Need more than {} lamports for transient stake to be rent-exempt and mergeable, {} provided",
@@ -1319,13 +1327,15 @@ impl Processor {
         // the stake account rent exemption is withdrawn after the merge, so
         let total_lamports = lamports.saturating_add(stake_rent);
 
-        if reserve_stake_account_info
+        let reserve_stake_account_lamports = reserve_stake_account_info
             .lamports()
+            .saturating_sub(stake_pool.total_lamports_liquidity);
+        
+        if reserve_stake_account_lamports
             .saturating_sub(total_lamports)
             <= stake_rent
         {
-            let max_split_amount = reserve_stake_account_info
-                .lamports()
+            let max_split_amount = reserve_stake_account_lamports
                 .saturating_sub(2 * stake_rent);
             msg!(
                 "Reserve stake does not have enough lamports for increase, must be less than {}, {} requested",
@@ -1754,6 +1764,9 @@ impl Processor {
                     .checked_add(validator_stake_record.stake_lamports())
                     .ok_or(StakePoolError::CalculationFailure)?;
             }
+            total_lamports = total_lamports
+                .checked_sub(stake_pool.total_lamports_liquidity)
+                .ok_or(StakePoolError::CalculationFailure)?;
 
             let reward_lamports = total_lamports.saturating_sub(previous_lamports);
 
@@ -1831,18 +1844,15 @@ impl Processor {
             let pool_mint = Mint::unpack_from_slice(&pool_mint_info.data.borrow())?;
             stake_pool.pool_token_supply = pool_mint.supply;
 
-            let active_total_lamports = stake_pool
-                .calc_active_total_lamports()
-                .ok_or(StakePoolError::CalculationFailure)?;
-            stake_pool.rate_of_exchange = if active_total_lamports == stake_pool.pool_token_supply    // TODO  TODO TODO TODO TODO Если 1 лампорт и 2 токена !!!!!!!!!!!!!!!!!
+            stake_pool.rate_of_exchange = if stake_pool.total_lamports == stake_pool.pool_token_supply    // TODO  TODO TODO TODO TODO Если 1 лампорт и 2 токена !!!!!!!!!!!!!!!!!
             || stake_pool.pool_token_supply == 0
-            || active_total_lamports == 0
+            || stake_pool.total_lamports == 0
             {
                 None
             } else {
                 Some(RateOfExchange {
                     denominator: stake_pool.pool_token_supply,
-                    numerator: active_total_lamports,
+                    numerator: stake_pool.total_lamports,
                 })
             };
 
@@ -2838,10 +2848,6 @@ impl Processor {
             deposit_lamports,
         )?;
 
-        stake_pool.total_lamports = stake_pool
-            .total_lamports
-            .checked_add(deposit_lamports)
-            .ok_or(StakePoolError::CalculationFailure)?;
         stake_pool.total_lamports_liquidity = stake_pool
             .total_lamports_liquidity
             .checked_add(deposit_lamports)
@@ -3026,6 +3032,7 @@ impl PrintProgramError for StakePoolError {
             StakePoolError::TransientAccountInUse => msg!("Error: Provided validator stake account already has a transient stake account in use"),
             StakePoolError::InvalidSolWithdrawAuthority => msg!("Error: Provided sol withdraw authority does not match the program's"),
             StakePoolError::SolWithdrawalTooLarge => msg!("Error: Too much SOL withdrawn from the stake pool's reserve account"),
+            StakePoolError::SolLessThanLiquiditySol => msg!("Error: The number of sol on the stake pool's reserve account is less than the number of liquidity sol"),
         }
     }
 }

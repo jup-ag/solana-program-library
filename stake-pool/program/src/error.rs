@@ -130,6 +130,9 @@ pub enum StakePoolError {
     /// Too much SOL withdrawn from the stake pool's reserve account
     #[error("SolWithdrawalTooLarge")]
     SolWithdrawalTooLarge,
+    /// The number of sol on the stake pool's reserve account is less than the number of liquidity sol
+    #[error("SolLessThanLiquiditySol")]
+    SolLessThanLiquiditySol,
 }
 impl From<StakePoolError> for ProgramError {
     fn from(e: StakePoolError) -> Self {

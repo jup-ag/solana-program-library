@@ -554,6 +554,14 @@ fn command_increase_validator_stake(
         .find(vote_account)
         .ok_or("Vote account not found in validator list")?;
 
+    let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    if let None = config.rpc_client
+        .get_balance(&stake_pool.reserve_stake)?
+        .saturating_sub(stake_rent)
+        .checked_sub(stake_pool.total_lamports_liquidity) {
+        return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
+    }
+
     let mut signers = vec![config.fee_payer.as_ref(), config.staker.as_ref()];
     unique_signers!(signers);
     let transaction = checked_transaction_with_signers(
@@ -1053,7 +1061,7 @@ fn command_deposit_sol(
     Ok(())
 }
 
-fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
+fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {    // TODO добавить показ ликвидности
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
     let reserve_stake_account_address = stake_pool.reserve_stake.to_string();
     let total_lamports = stake_pool.total_lamports;
