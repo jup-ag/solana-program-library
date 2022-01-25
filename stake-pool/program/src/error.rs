@@ -130,6 +130,12 @@ pub enum StakePoolError {
     /// Too much SOL withdrawn from the stake pool's reserve account
     #[error("SolWithdrawalTooLarge")]
     SolWithdrawalTooLarge,
+    /// Too much liquidity SOL withdrawn from the stake pool's reserve account, stake pool does not have such liquidity at all
+    #[error("LiquiditySolWithdrawalTooLargeAtAll")]
+    LiquiditySolWithdrawalTooLargeAtAll,
+    /// Too much liquidity SOL withdrawn from the stake pool's reserve account, stake pool's reserve account does not have such liquidity at time
+    #[error("LiquiditySolWithdrawalTooLargeAtTime")]
+    LiquiditySolWithdrawalTooLargeAtTime,
     /// The number of sol on the stake pool's reserve account is less than the number of liquidity sol
     #[error("SolLessThanLiquiditySol")]
     SolLessThanLiquiditySol,
