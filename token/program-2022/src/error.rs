@@ -105,6 +105,20 @@ pub enum TokenError {
     /// Mint has non-zero supply. Burn all tokens before closing the mint.
     #[error("Mint has non-zero supply. Burn all tokens before closing the mint")]
     MintHasSupply,
+    /// No authority exists to perform the desired operation
+    #[error("No authority exists to perform the desired operation")]
+    NoAuthorityExists,
+
+    // 30
+    /// Transfer fee exceeds maximum of 10,000 basis points
+    #[error("Transfer fee exceeds maximum of 10,000 basis points")]
+    TransferFeeExceedsMaximum,
+    /// Mint required for this account to transfer tokens, use `transfer_checked` or `transfer_checked_with_fee`
+    #[error("Mint required for this account to transfer tokens, use `transfer_checked` or `transfer_checked_with_fee`")]
+    MintRequiredForTransfer,
+    /// Calculated fee does not match expected fee
+    #[error("Calculated fee does not match expected fee")]
+    FeeMismatch,
 }
 impl From<TokenError> for ProgramError {
     fn from(e: TokenError) -> Self {

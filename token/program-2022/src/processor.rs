@@ -1,12 +1,14 @@
 //! Program state processor
 
 use crate::{
-    check_program_account,
+    check_program_account, cmp_pubkeys,
     error::TokenError,
     extension::{
         confidential_transfer::{self, ConfidentialTransferAccount},
+        default_account_state::{self, DefaultAccountState},
         mint_close_authority::MintCloseAuthority,
-        transfer_fee, ExtensionType, StateWithExtensions, StateWithExtensionsMut,
+        transfer_fee::{self, TransferFeeAmount, TransferFeeConfig},
+        ExtensionType, StateWithExtensions, StateWithExtensionsMut,
     },
     instruction::{is_valid_signer_index, AuthorityType, TokenInstruction, MAX_SIGNERS},
     state::{Account, AccountState, Mint, Multisig},
@@ -14,17 +16,19 @@ use crate::{
 use num_traits::FromPrimitive;
 use solana_program::{
     account_info::{next_account_info, AccountInfo},
+    clock::Clock,
     decode_error::DecodeError,
     entrypoint::ProgramResult,
     msg,
     program::set_return_data,
     program_error::{PrintProgramError, ProgramError},
+    program_memory::sol_memset,
     program_option::COption,
     program_pack::Pack,
     pubkey::Pubkey,
     sysvar::{rent::Rent, Sysvar},
 };
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 
 /// Program state handler.
 pub struct Processor {}
@@ -58,6 +62,14 @@ impl Processor {
         let extension_types = mint.get_extension_types()?;
         if ExtensionType::get_account_len::<Mint>(&extension_types) != mint_data_len {
             return Err(ProgramError::InvalidAccountData);
+        }
+
+        if let Ok(default_account_state) = mint.get_extension_mut::<DefaultAccountState>() {
+            let default_account_state = AccountState::try_from(default_account_state.state)
+                .or(Err(ProgramError::InvalidAccountData))?;
+            if default_account_state == AccountState::Frozen && freeze_authority.is_none() {
+                return Err(TokenError::MintCannotFreeze.into());
+            }
         }
 
         mint.base.mint_authority = COption::Some(mint_authority);
@@ -120,7 +132,11 @@ impl Processor {
         }
 
         // get_required_account_extensions checks mint validity
-        let required_extensions = Self::get_required_account_extensions(mint_info)?;
+        let mint_data = mint_info.data.borrow();
+        let mint = StateWithExtensions::<Mint>::unpack(&mint_data)
+            .map_err(|_| Into::<ProgramError>::into(TokenError::InvalidMint))?;
+        let required_extensions =
+            Self::get_required_account_extensions_from_unpacked_mint(mint_info.owner, &mint)?;
         if ExtensionType::get_account_len::<Account>(&required_extensions)
             != new_account_info_data_len
         {
@@ -130,12 +146,20 @@ impl Processor {
             account.init_account_extension_from_type(extension)?;
         }
 
+        let starting_state =
+            if let Ok(default_account_state) = mint.get_extension::<DefaultAccountState>() {
+                AccountState::try_from(default_account_state.state)
+                    .or(Err(ProgramError::InvalidAccountData))?
+            } else {
+                AccountState::Initialized
+            };
+
         account.base.mint = *mint_info.key;
         account.base.owner = *owner;
         account.base.delegate = COption::None;
         account.base.delegated_amount = 0;
-        account.base.state = AccountState::Initialized;
-        if *mint_info.key == crate::native_mint::id() {
+        account.base.state = starting_state;
+        if cmp_pubkeys(mint_info.key, &crate::native_mint::id()) {
             let rent_exempt_reserve = rent.minimum_balance(new_account_info_data_len);
             account.base.is_native = COption::Some(rent_exempt_reserve);
             account.base.amount = new_account_info
@@ -148,6 +172,7 @@ impl Processor {
         };
 
         account.pack_base();
+        account.init_account_type()?;
 
         Ok(())
     }
@@ -225,6 +250,7 @@ impl Processor {
         accounts: &[AccountInfo],
         amount: u64,
         expected_decimals: Option<u8>,
+        expected_fee: Option<u64>,
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
 
@@ -240,34 +266,55 @@ impl Processor {
         let authority_info = next_account_info(account_info_iter)?;
         let authority_info_data_len = authority_info.data_len();
 
-        let mut source_account = Account::unpack(&source_account_info.data.borrow())?;
-        let mut dest_account = Account::unpack(&dest_account_info.data.borrow())?;
-
-        if source_account.is_frozen() || dest_account.is_frozen() {
+        let mut source_account_data = source_account_info.data.borrow_mut();
+        let mut source_account =
+            StateWithExtensionsMut::<Account>::unpack(&mut source_account_data)?;
+        if source_account.base.is_frozen() {
             return Err(TokenError::AccountFrozen.into());
         }
-        if source_account.amount < amount {
+        if source_account.base.amount < amount {
             return Err(TokenError::InsufficientFunds.into());
         }
-        if source_account.mint != dest_account.mint {
-            return Err(TokenError::MintMismatch.into());
-        }
-
-        if let Some((mint_info, expected_decimals)) = expected_mint_info {
-            if source_account.mint != *mint_info.key {
+        let fee = if let Some((mint_info, expected_decimals)) = expected_mint_info {
+            if !cmp_pubkeys(&source_account.base.mint, mint_info.key) {
                 return Err(TokenError::MintMismatch.into());
             }
 
-            let mint = Mint::unpack(&mint_info.data.borrow_mut())?;
-            if expected_decimals != mint.decimals {
+            let mint_data = mint_info.try_borrow_data()?;
+            let mint = StateWithExtensions::<Mint>::unpack(&mint_data)?;
+            if expected_decimals != mint.base.decimals {
                 return Err(TokenError::MintDecimalsMismatch.into());
+            }
+
+            if let Ok(transfer_fee_config) = mint.get_extension::<TransferFeeConfig>() {
+                transfer_fee_config
+                    .calculate_epoch_fee(Clock::get()?.epoch, amount)
+                    .ok_or(TokenError::Overflow)?
+            } else {
+                0
+            }
+        } else {
+            // Transfer fee amount extension exists on the account, but no mint
+            // was provided to calculate the fee, abort
+            if source_account
+                .get_extension_mut::<TransferFeeAmount>()
+                .is_ok()
+            {
+                return Err(TokenError::MintRequiredForTransfer.into());
+            } else {
+                0
+            }
+        };
+        if let Some(expected_fee) = expected_fee {
+            if expected_fee != fee {
+                msg!("Calculated fee {}, received {}", fee, expected_fee);
+                return Err(TokenError::FeeMismatch.into());
             }
         }
 
-        let self_transfer = source_account_info.key == dest_account_info.key;
-
-        match source_account.delegate {
-            COption::Some(ref delegate) if authority_info.key == delegate => {
+        let self_transfer = cmp_pubkeys(source_account_info.key, dest_account_info.key);
+        match source_account.base.delegate {
+            COption::Some(ref delegate) if cmp_pubkeys(authority_info.key, delegate) => {
                 Self::validate_owner(
                     program_id,
                     delegate,
@@ -275,27 +322,34 @@ impl Processor {
                     authority_info_data_len,
                     account_info_iter.as_slice(),
                 )?;
-                if source_account.delegated_amount < amount {
+                if source_account.base.delegated_amount < amount {
                     return Err(TokenError::InsufficientFunds.into());
                 }
                 if !self_transfer {
-                    source_account.delegated_amount = source_account
+                    source_account.base.delegated_amount = source_account
+                        .base
                         .delegated_amount
                         .checked_sub(amount)
                         .ok_or(TokenError::Overflow)?;
-                    if source_account.delegated_amount == 0 {
-                        source_account.delegate = COption::None;
+                    if source_account.base.delegated_amount == 0 {
+                        source_account.base.delegate = COption::None;
                     }
                 }
             }
             _ => Self::validate_owner(
                 program_id,
-                &source_account.owner,
+                &source_account.base.owner,
                 authority_info,
                 authority_info_data_len,
                 account_info_iter.as_slice(),
             )?,
         };
+
+        // Revisit this later to see if it's worth adding a check to reduce
+        // compute costs, ie:
+        // if self_transfer || amount == 0
+        check_program_account(source_account_info.owner)?;
+        check_program_account(dest_account_info.owner)?;
 
         // This check MUST occur just before the amounts are manipulated
         // to ensure self-transfers are fully validated
@@ -303,16 +357,43 @@ impl Processor {
             return Ok(());
         }
 
-        source_account.amount = source_account
+        // self-transfer was dealt with earlier, so this *should* be safe
+        let mut dest_account_data = dest_account_info.data.borrow_mut();
+        let mut dest_account = StateWithExtensionsMut::<Account>::unpack(&mut dest_account_data)?;
+
+        if dest_account.base.is_frozen() {
+            return Err(TokenError::AccountFrozen.into());
+        }
+        if !cmp_pubkeys(&source_account.base.mint, &dest_account.base.mint) {
+            return Err(TokenError::MintMismatch.into());
+        }
+
+        source_account.base.amount = source_account
+            .base
             .amount
             .checked_sub(amount)
             .ok_or(TokenError::Overflow)?;
-        dest_account.amount = dest_account
+        let credited_amount = amount.checked_sub(fee).ok_or(TokenError::Overflow)?;
+        dest_account.base.amount = dest_account
+            .base
             .amount
-            .checked_add(amount)
+            .checked_add(credited_amount)
             .ok_or(TokenError::Overflow)?;
+        if fee > 0 {
+            if let Ok(extension) = dest_account.get_extension_mut::<TransferFeeAmount>() {
+                let new_withheld_amount = u64::from(extension.withheld_amount)
+                    .checked_add(fee)
+                    .ok_or(TokenError::Overflow)?;
+                extension.withheld_amount = new_withheld_amount.into();
+            } else {
+                // Use the generic error since this should never happen. If there's
+                // a fee, then the mint has a fee configured, which means all accounts
+                // must have the withholding.
+                return Err(TokenError::InvalidState.into());
+            }
+        }
 
-        if source_account.is_native() {
+        if source_account.base.is_native() {
             let source_starting_lamports = source_account_info.lamports();
             **source_account_info.lamports.borrow_mut() = source_starting_lamports
                 .checked_sub(amount)
@@ -324,8 +405,8 @@ impl Processor {
                 .ok_or(TokenError::Overflow)?;
         }
 
-        Account::pack(source_account, &mut source_account_info.data.borrow_mut())?;
-        Account::pack(dest_account, &mut dest_account_info.data.borrow_mut())?;
+        source_account.pack_base();
+        dest_account.pack_base();
 
         Ok(())
     }
@@ -357,7 +438,7 @@ impl Processor {
         }
 
         if let Some((mint_info, expected_decimals)) = expected_mint_info {
-            if source_account.mint != *mint_info.key {
+            if !cmp_pubkeys(&source_account.mint, mint_info.key) {
                 return Err(TokenError::MintMismatch.into());
             }
 
@@ -518,6 +599,36 @@ impl Processor {
                     )?;
                     extension.close_authority = new_authority.try_into()?;
                 }
+                AuthorityType::TransferFeeConfig => {
+                    let extension = mint.get_extension_mut::<TransferFeeConfig>()?;
+                    let maybe_transfer_fee_config_authority: Option<Pubkey> =
+                        extension.transfer_fee_config_authority.into();
+                    let transfer_fee_config_authority = maybe_transfer_fee_config_authority
+                        .ok_or(TokenError::AuthorityTypeNotSupported)?;
+                    Self::validate_owner(
+                        program_id,
+                        &transfer_fee_config_authority,
+                        authority_info,
+                        authority_info_data_len,
+                        account_info_iter.as_slice(),
+                    )?;
+                    extension.transfer_fee_config_authority = new_authority.try_into()?;
+                }
+                AuthorityType::WithheldWithdraw => {
+                    let extension = mint.get_extension_mut::<TransferFeeConfig>()?;
+                    let maybe_withdraw_withheld_authority: Option<Pubkey> =
+                        extension.withdraw_withheld_authority.into();
+                    let withdraw_withheld_authority = maybe_withdraw_withheld_authority
+                        .ok_or(TokenError::AuthorityTypeNotSupported)?;
+                    Self::validate_owner(
+                        program_id,
+                        &withdraw_withheld_authority,
+                        authority_info,
+                        authority_info_data_len,
+                        account_info_iter.as_slice(),
+                    )?;
+                    extension.withdraw_withheld_authority = new_authority.try_into()?;
+                }
                 _ => {
                     return Err(TokenError::AuthorityTypeNotSupported.into());
                 }
@@ -551,7 +662,7 @@ impl Processor {
         if dest_account.base.is_native() {
             return Err(TokenError::NativeNotSupported.into());
         }
-        if mint_info.key != &dest_account.base.mint {
+        if !cmp_pubkeys(mint_info.key, &dest_account.base.mint) {
             return Err(TokenError::MintMismatch.into());
         }
 
@@ -573,6 +684,12 @@ impl Processor {
             )?,
             COption::None => return Err(TokenError::FixedSupply.into()),
         }
+
+        // Revisit this later to see if it's worth adding a check to reduce
+        // compute costs, ie:
+        // if amount == 0
+        check_program_account(mint_info.owner)?;
+        check_program_account(dest_account_info.owner)?;
 
         dest_account.base.amount = dest_account
             .base
@@ -629,7 +746,7 @@ impl Processor {
         }
 
         match source_account.delegate {
-            COption::Some(ref delegate) if authority_info.key == delegate => {
+            COption::Some(ref delegate) if cmp_pubkeys(authority_info.key, delegate) => {
                 Self::validate_owner(
                     program_id,
                     delegate,
@@ -658,6 +775,12 @@ impl Processor {
             )?,
         }
 
+        // Revisit this later to see if it's worth adding a check to reduce
+        // compute costs, ie:
+        // if amount == 0
+        check_program_account(source_account_info.owner)?;
+        check_program_account(mint_info.owner)?;
+
         source_account.amount = source_account
             .amount
             .checked_sub(amount)
@@ -680,6 +803,10 @@ impl Processor {
         let dest_account_info = next_account_info(account_info_iter)?;
         let authority_info = next_account_info(account_info_iter)?;
         let authority_info_data_len = authority_info.data_len();
+
+        if cmp_pubkeys(source_account_info.key, dest_account_info.key) {
+            return Err(ProgramError::InvalidAccountData);
+        }
 
         let mut source_account_data = source_account_info.data.borrow_mut();
         if let Ok(mut source_account) =
@@ -707,8 +834,6 @@ impl Processor {
             {
                 confidential_transfer_state.closable()?
             }
-            source_account.base.amount = 0;
-            source_account.pack_base();
         } else if let Ok(mut mint) =
             StateWithExtensionsMut::<Mint>::unpack(&mut source_account_data)
         {
@@ -736,6 +861,8 @@ impl Processor {
             .ok_or(TokenError::Overflow)?;
 
         **source_account_info.lamports.borrow_mut() = 0;
+        let data_len = source_account_data.len();
+        sol_memset(*source_account_data, 0, data_len);
 
         Ok(())
     }
@@ -760,7 +887,7 @@ impl Processor {
         if source_account.is_native() {
             return Err(TokenError::NativeNotSupported.into());
         }
-        if mint_info.key != &source_account.mint {
+        if !cmp_pubkeys(mint_info.key, &source_account.mint) {
             return Err(TokenError::MintMismatch.into());
         }
 
@@ -788,13 +915,11 @@ impl Processor {
     }
 
     /// Processes a [SyncNative](enum.TokenInstruction.html) instruction
-    pub fn process_sync_native(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    pub fn process_sync_native(accounts: &[AccountInfo]) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let native_account_info = next_account_info(account_info_iter)?;
 
-        if native_account_info.owner != program_id {
-            return Err(ProgramError::IncorrectProgramId);
-        }
+        check_program_account(native_account_info.owner)?;
         let mut native_account = Account::unpack(&native_account_info.data.borrow())?;
 
         if let COption::Some(rent_exempt_reserve) = native_account.is_native {
@@ -887,7 +1012,7 @@ impl Processor {
             #[allow(deprecated)]
             TokenInstruction::Transfer { amount } => {
                 msg!("Instruction: Transfer");
-                Self::process_transfer(program_id, accounts, amount, None)
+                Self::process_transfer(program_id, accounts, amount, None, None)
             }
             TokenInstruction::Approve { amount } => {
                 msg!("Instruction: Approve");
@@ -926,7 +1051,7 @@ impl Processor {
             }
             TokenInstruction::TransferChecked { amount, decimals } => {
                 msg!("Instruction: TransferChecked");
-                Self::process_transfer(program_id, accounts, amount, Some(decimals))
+                Self::process_transfer(program_id, accounts, amount, Some(decimals), None)
             }
             TokenInstruction::ApproveChecked { amount, decimals } => {
                 msg!("Instruction: ApproveChecked");
@@ -942,7 +1067,7 @@ impl Processor {
             }
             TokenInstruction::SyncNative => {
                 msg!("Instruction: SyncNative");
-                Self::process_sync_native(program_id, accounts)
+                Self::process_sync_native(accounts)
             }
             TokenInstruction::GetAccountDataSize => {
                 msg!("Instruction: GetAccountDataSize");
@@ -962,6 +1087,13 @@ impl Processor {
                     &input[1..],
                 )
             }
+            TokenInstruction::DefaultAccountStateExtension => {
+                default_account_state::processor::process_instruction(
+                    program_id,
+                    accounts,
+                    &input[1..],
+                )
+            }
         }
     }
 
@@ -973,11 +1105,11 @@ impl Processor {
         owner_account_data_len: usize,
         signers: &[AccountInfo],
     ) -> ProgramResult {
-        if expected_owner != owner_account_info.key {
+        if !cmp_pubkeys(expected_owner, owner_account_info.key) {
             return Err(TokenError::OwnerMismatch.into());
         }
 
-        if program_id == owner_account_info.owner
+        if cmp_pubkeys(program_id, owner_account_info.owner)
             && owner_account_data_len == Multisig::get_packed_len()
         {
             let multisig = Multisig::unpack(&owner_account_info.data.borrow())?;
@@ -985,7 +1117,7 @@ impl Processor {
             let mut matched = [false; MAX_SIGNERS];
             for signer in signers.iter() {
                 for (position, key) in multisig.signers[0..multisig.n as usize].iter().enumerate() {
-                    if key == signer.key && !matched[position] {
+                    if cmp_pubkeys(key, signer.key) && !matched[position] {
                         if !signer.is_signer {
                             return Err(ProgramError::MissingRequiredSignature);
                         }
@@ -1007,10 +1139,17 @@ impl Processor {
     fn get_required_account_extensions(
         mint_account_info: &AccountInfo,
     ) -> Result<Vec<ExtensionType>, ProgramError> {
-        check_program_account(mint_account_info.owner)?;
         let mint_data = mint_account_info.data.borrow();
         let state = StateWithExtensions::<Mint>::unpack(&mint_data)
             .map_err(|_| Into::<ProgramError>::into(TokenError::InvalidMint))?;
+        Self::get_required_account_extensions_from_unpacked_mint(mint_account_info.owner, &state)
+    }
+
+    fn get_required_account_extensions_from_unpacked_mint(
+        token_program_id: &Pubkey,
+        state: &StateWithExtensions<Mint>,
+    ) -> Result<Vec<ExtensionType>, ProgramError> {
+        check_program_account(token_program_id)?;
         let mint_extensions: Vec<ExtensionType> = state.get_extension_types()?;
         Ok(ExtensionType::get_required_init_account_extensions(
             &mint_extensions,
@@ -1085,6 +1224,18 @@ impl PrintProgramError for TokenError {
             TokenError::MintHasSupply => {
                 msg!("Error: Mint has non-zero supply. Burn all tokens before closing the mint")
             }
+            TokenError::NoAuthorityExists => {
+                msg!("Error: No authority exists to perform the desired operation");
+            }
+            TokenError::TransferFeeExceedsMaximum => {
+                msg!("Error: Transfer fee exceeds maximum of 10,000 basis points");
+            }
+            TokenError::MintRequiredForTransfer => {
+                msg!("Mint required for this account to transfer tokens, use `transfer_checked` or `transfer_checked_with_fee`");
+            }
+            TokenError::FeeMismatch => {
+                msg!("Calculated fee does not match expected fee");
+            }
         }
     }
 }
@@ -1092,10 +1243,15 @@ impl PrintProgramError for TokenError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instruction::*;
+    use crate::{
+        extension::transfer_fee::instruction::initialize_transfer_fee_config, instruction::*,
+    };
     use solana_program::{
-        account_info::IntoAccountInfo, clock::Epoch, instruction::Instruction, program_error,
-        sysvar::rent,
+        account_info::IntoAccountInfo,
+        clock::Epoch,
+        instruction::Instruction,
+        program_error,
+        sysvar::{clock::Clock, rent},
     };
     use solana_sdk::account::{
         create_account_for_test, create_is_signer_account_infos, Account as SolanaAccount,
@@ -1123,8 +1279,11 @@ mod tests {
             Err(ProgramError::Custom(42)) // Not supported
         }
 
-        fn sol_get_clock_sysvar(&self, _var_addr: *mut u8) -> u64 {
-            program_error::UNSUPPORTED_SYSVAR
+        fn sol_get_clock_sysvar(&self, var_addr: *mut u8) -> u64 {
+            unsafe {
+                *(var_addr as *mut _ as *mut Clock) = Clock::default();
+            }
+            solana_program::entrypoint::SUCCESS
         }
 
         fn sol_get_epoch_schedule_sysvar(&self, _var_addr: *mut u8) -> u64 {
@@ -1143,7 +1302,7 @@ mod tests {
             solana_program::entrypoint::SUCCESS
         }
 
-        fn sol_set_return_data(&mut self, data: &[u8]) {
+        fn sol_set_return_data(&self, data: &[u8]) {
             assert_eq!(&*EXPECTED_DATA.read().unwrap(), data)
         }
     }
@@ -1383,6 +1542,23 @@ mod tests {
             vec![&mut mint_account, &mut rent_sysvar],
         )
         .unwrap();
+
+        // mint not owned by program
+        let not_program_id = Pubkey::new_unique();
+        mint_account.owner = not_program_id;
+        assert_eq!(
+            Err(ProgramError::IncorrectProgramId),
+            do_process_instruction(
+                initialize_account(&program_id, &account_key, &mint_key, &owner_key).unwrap(),
+                vec![
+                    &mut account_account,
+                    &mut mint_account,
+                    &mut owner_account,
+                    &mut rent_sysvar
+                ],
+            )
+        );
+        mint_account.owner = program_id;
 
         // create account
         do_process_instruction(
@@ -1893,6 +2069,40 @@ mod tests {
                 ],
             )
         );
+
+        // account not owned by program
+        let not_program_id = Pubkey::new_unique();
+        account_account.owner = not_program_id;
+        assert_eq!(
+            Err(ProgramError::IncorrectProgramId),
+            do_process_instruction(
+                #[allow(deprecated)]
+                transfer(&program_id, &account_key, &account2_key, &owner_key, &[], 0,).unwrap(),
+                vec![
+                    &mut account_account,
+                    &mut account2_account,
+                    &mut owner2_account,
+                ],
+            )
+        );
+        account_account.owner = program_id;
+
+        // account 2 not owned by program
+        let not_program_id = Pubkey::new_unique();
+        account2_account.owner = not_program_id;
+        assert_eq!(
+            Err(ProgramError::IncorrectProgramId),
+            do_process_instruction(
+                #[allow(deprecated)]
+                transfer(&program_id, &account_key, &account2_key, &owner_key, &[], 0,).unwrap(),
+                vec![
+                    &mut account_account,
+                    &mut account2_account,
+                    &mut owner2_account,
+                ],
+            )
+        );
+        account2_account.owner = program_id;
 
         // transfer
         do_process_instruction(
@@ -3946,6 +4156,30 @@ mod tests {
             )
         );
 
+        // mint not owned by program
+        let not_program_id = Pubkey::new_unique();
+        mint_account.owner = not_program_id;
+        assert_eq!(
+            Err(ProgramError::IncorrectProgramId),
+            do_process_instruction(
+                mint_to(&program_id, &mint_key, &account_key, &owner_key, &[], 0).unwrap(),
+                vec![&mut mint_account, &mut account_account, &mut owner_account],
+            )
+        );
+        mint_account.owner = program_id;
+
+        // account not owned by program
+        let not_program_id = Pubkey::new_unique();
+        account_account.owner = not_program_id;
+        assert_eq!(
+            Err(ProgramError::IncorrectProgramId),
+            do_process_instruction(
+                mint_to(&program_id, &mint_key, &account_key, &owner_key, &[], 0).unwrap(),
+                vec![&mut mint_account, &mut account_account, &mut owner_account],
+            )
+        );
+        account_account.owner = program_id;
+
         // uninitialized destination account
         assert_eq!(
             Err(ProgramError::UninitializedAccount),
@@ -4325,6 +4559,30 @@ mod tests {
                 vec![&mut account_account, &mut mint_account, &mut owner2_account],
             )
         );
+
+        // account not owned by program
+        let not_program_id = Pubkey::new_unique();
+        account_account.owner = not_program_id;
+        assert_eq!(
+            Err(ProgramError::IncorrectProgramId),
+            do_process_instruction(
+                burn(&program_id, &account_key, &mint_key, &owner_key, &[], 0).unwrap(),
+                vec![&mut account_account, &mut mint_account, &mut owner_account],
+            )
+        );
+        account_account.owner = program_id;
+
+        // mint not owned by program
+        let not_program_id = Pubkey::new_unique();
+        mint_account.owner = not_program_id;
+        assert_eq!(
+            Err(ProgramError::IncorrectProgramId),
+            do_process_instruction(
+                burn(&program_id, &account_key, &mint_key, &owner_key, &[], 0).unwrap(),
+                vec![&mut account_account, &mut mint_account, &mut owner_account],
+            )
+        );
+        mint_account.owner = program_id;
 
         // mint mismatch
         assert_eq!(
@@ -5120,22 +5378,8 @@ mod tests {
     }
 
     #[test]
-    fn test_close_account_dups() {
+    fn test_owner_close_account_dups() {
         let program_id = crate::id();
-        let account1_key = Pubkey::new_unique();
-        let mut account1_account = SolanaAccount::new(
-            account_minimum_balance(),
-            Account::get_packed_len(),
-            &program_id,
-        );
-        let account1_info: AccountInfo = (&account1_key, true, &mut account1_account).into();
-        let account2_key = Pubkey::new_unique();
-        let mut account2_account = SolanaAccount::new(
-            account_minimum_balance(),
-            Account::get_packed_len(),
-            &program_id,
-        );
-        let account2_info: AccountInfo = (&account2_key, true, &mut account2_account).into();
         let owner_key = Pubkey::new_unique();
         let mint_key = Pubkey::new_unique();
         let mut mint_account =
@@ -5152,13 +5396,29 @@ mod tests {
         )
         .unwrap();
 
+        let to_close_key = Pubkey::new_unique();
+        let mut to_close_account = SolanaAccount::new(
+            account_minimum_balance(),
+            Account::get_packed_len(),
+            &program_id,
+        );
+        let to_close_account_info: AccountInfo =
+            (&to_close_key, true, &mut to_close_account).into();
+        let destination_account_key = Pubkey::new_unique();
+        let mut destination_account = SolanaAccount::new(
+            account_minimum_balance(),
+            Account::get_packed_len(),
+            &program_id,
+        );
+        let destination_account_info: AccountInfo =
+            (&destination_account_key, true, &mut destination_account).into();
         // create account
         do_process_instruction_dups(
-            initialize_account(&program_id, &account1_key, &mint_key, &account1_key).unwrap(),
+            initialize_account(&program_id, &to_close_key, &mint_key, &to_close_key).unwrap(),
             vec![
-                account1_info.clone(),
+                to_close_account_info.clone(),
                 mint_info.clone(),
-                account1_info.clone(),
+                to_close_account_info.clone(),
                 rent_info.clone(),
             ],
         )
@@ -5168,41 +5428,89 @@ mod tests {
         do_process_instruction_dups(
             close_account(
                 &program_id,
-                &account1_key,
-                &account2_key,
-                &account1_key,
+                &to_close_key,
+                &destination_account_key,
+                &to_close_key,
                 &[],
             )
             .unwrap(),
             vec![
-                account1_info.clone(),
-                account2_info.clone(),
-                account1_info.clone(),
+                to_close_account_info.clone(),
+                destination_account_info.clone(),
+                to_close_account_info.clone(),
             ],
+        )
+        .unwrap();
+        assert_eq!(*to_close_account_info.data.borrow(), &[0u8; Account::LEN]);
+    }
+
+    #[test]
+    fn test_close_authority_close_account_dups() {
+        let program_id = crate::id();
+        let owner_key = Pubkey::new_unique();
+        let mint_key = Pubkey::new_unique();
+        let mut mint_account =
+            SolanaAccount::new(mint_minimum_balance(), Mint::get_packed_len(), &program_id);
+        let mint_info: AccountInfo = (&mint_key, false, &mut mint_account).into();
+        let rent_key = rent::id();
+        let mut rent_sysvar = rent_sysvar();
+        let rent_info: AccountInfo = (&rent_key, false, &mut rent_sysvar).into();
+
+        // create mint
+        do_process_instruction_dups(
+            initialize_mint(&program_id, &mint_key, &owner_key, None, 2).unwrap(),
+            vec![mint_info.clone(), rent_info.clone()],
         )
         .unwrap();
 
-        // source-close-authority close
-        let mut account = Account::unpack_unchecked(&account1_info.data.borrow()).unwrap();
-        account.close_authority = COption::Some(account1_key);
+        let to_close_key = Pubkey::new_unique();
+        let mut to_close_account = SolanaAccount::new(
+            account_minimum_balance(),
+            Account::get_packed_len(),
+            &program_id,
+        );
+        let to_close_account_info: AccountInfo =
+            (&to_close_key, true, &mut to_close_account).into();
+        let destination_account_key = Pubkey::new_unique();
+        let mut destination_account = SolanaAccount::new(
+            account_minimum_balance(),
+            Account::get_packed_len(),
+            &program_id,
+        );
+        let destination_account_info: AccountInfo =
+            (&destination_account_key, true, &mut destination_account).into();
+        // create account
+        do_process_instruction_dups(
+            initialize_account(&program_id, &to_close_key, &mint_key, &to_close_key).unwrap(),
+            vec![
+                to_close_account_info.clone(),
+                mint_info.clone(),
+                to_close_account_info.clone(),
+                rent_info.clone(),
+            ],
+        )
+        .unwrap();
+        let mut account = Account::unpack_unchecked(&to_close_account_info.data.borrow()).unwrap();
+        account.close_authority = COption::Some(to_close_key);
         account.owner = owner_key;
-        Account::pack(account, &mut account1_info.data.borrow_mut()).unwrap();
+        Account::pack(account, &mut to_close_account_info.data.borrow_mut()).unwrap();
         do_process_instruction_dups(
             close_account(
                 &program_id,
-                &account1_key,
-                &account2_key,
-                &account1_key,
+                &to_close_key,
+                &destination_account_key,
+                &to_close_key,
                 &[],
             )
             .unwrap(),
             vec![
-                account1_info.clone(),
-                account2_info.clone(),
-                account1_info.clone(),
+                to_close_account_info.clone(),
+                destination_account_info.clone(),
+                to_close_account_info.clone(),
             ],
         )
         .unwrap();
+        assert_eq!(*to_close_account_info.data.borrow(), &[0u8; Account::LEN]);
     }
 
     #[test]
@@ -5424,10 +5732,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let account = Account::unpack_unchecked(&account2_account.data).unwrap();
-        assert!(account.is_native());
-        assert_eq!(account_account.lamports, 0);
-        assert_eq!(account.amount, 0);
+        assert_eq!(account2_account.data, [0u8; Account::LEN]);
         assert_eq!(
             account3_account.lamports,
             3 * account_minimum_balance() + 2 + 42
@@ -5646,9 +5951,7 @@ mod tests {
         .unwrap();
         assert_eq!(account_account.lamports, 0);
         assert_eq!(account3_account.lamports, 2 * account_minimum_balance());
-        let account = Account::unpack_unchecked(&account_account.data).unwrap();
-        assert!(account.is_native());
-        assert_eq!(account.amount, 0);
+        assert_eq!(account_account.data, [0u8; Account::LEN]);
     }
 
     #[test]
@@ -6338,6 +6641,19 @@ mod tests {
             ],
         )
         .unwrap();
+
+        // fail sync, not owned by program
+        let not_program_id = Pubkey::new_unique();
+        native_account.owner = not_program_id;
+        assert_eq!(
+            Err(ProgramError::IncorrectProgramId),
+            do_process_instruction(
+                sync_native(&program_id, &native_account_key,).unwrap(),
+                vec![&mut native_account],
+            )
+        );
+        native_account.owner = program_id;
+
         let account = Account::unpack_unchecked(&native_account.data).unwrap();
         assert!(account.is_native());
         assert_eq!(account.amount, lamports);
@@ -6419,7 +6735,36 @@ mod tests {
         )
         .unwrap();
 
-        // TODO: Extended mint
+        // Extended mint
+        let mint_len = ExtensionType::get_account_len::<Mint>(&[ExtensionType::TransferFeeConfig]);
+        let mut extended_mint_account = SolanaAccount::new(
+            Rent::default().minimum_balance(mint_len),
+            mint_len,
+            &program_id,
+        );
+        let extended_mint_key = Pubkey::new_unique();
+        do_process_instruction(
+            initialize_transfer_fee_config(&program_id, &extended_mint_key, None, None, 10, 4242)
+                .unwrap(),
+            vec![&mut extended_mint_account],
+        )
+        .unwrap();
+        do_process_instruction(
+            initialize_mint(&program_id, &extended_mint_key, &owner_key, None, 2).unwrap(),
+            vec![&mut extended_mint_account, &mut rent_sysvar],
+        )
+        .unwrap();
+
+        set_expected_data(
+            ExtensionType::get_account_len::<Account>(&[ExtensionType::TransferFeeAmount])
+                .to_le_bytes()
+                .to_vec(),
+        );
+        do_process_instruction(
+            get_account_data_size(&program_id, &mint_key).unwrap(),
+            vec![&mut extended_mint_account],
+        )
+        .unwrap();
 
         // Invalid mint
         let mut invalid_mint_account = SolanaAccount::new(

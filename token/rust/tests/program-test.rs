@@ -44,6 +44,7 @@ impl TestContext {
 
         let token = Token::create_mint(
             Arc::clone(&client),
+            &spl_token_2022::id(),
             keypair_clone(&payer),
             &mint_account,
             &mint_authority_pubkey,
@@ -88,9 +89,10 @@ async fn associated_token_account() {
 
     assert_eq!(
         token
-            .get_account_info(alice_vault)
+            .get_account_info(&alice_vault)
             .await
-            .expect("failed to get account info"),
+            .expect("failed to get account info")
+            .base,
         state::Account {
             mint: *token.get_address(),
             owner: alice.pubkey(),
@@ -115,7 +117,8 @@ async fn get_or_create_associated_token_account() {
         token
             .get_or_create_associated_account_info(&alice.pubkey())
             .await
-            .expect("failed to get account info"),
+            .expect("failed to get account info")
+            .base,
         state::Account {
             mint: *token.get_address(),
             owner: alice.pubkey(),
@@ -187,9 +190,10 @@ async fn set_authority() {
 
     assert_eq!(
         token
-            .get_account_info(alice_vault)
+            .get_account_info(&alice_vault)
             .await
             .expect("failed to get account info")
+            .base
             .owner,
         bob.pubkey(),
     );
@@ -221,9 +225,10 @@ async fn mint_to() {
 
     assert_eq!(
         token
-            .get_account_info(alice_vault)
+            .get_account_info(&alice_vault)
             .await
             .expect("failed to get account")
+            .base
             .amount,
         mint_amount
     );
@@ -266,17 +271,19 @@ async fn transfer() {
 
     assert_eq!(
         token
-            .get_account_info(alice_vault)
+            .get_account_info(&alice_vault)
             .await
             .expect("failed to get account")
+            .base
             .amount,
         mint_amount - transfer_amount
     );
     assert_eq!(
         token
-            .get_account_info(bob_vault)
+            .get_account_info(&bob_vault)
             .await
             .expect("failed to get account")
+            .base
             .amount,
         transfer_amount
     );

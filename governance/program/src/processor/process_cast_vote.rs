@@ -11,6 +11,7 @@ use solana_program::{
 use spl_governance_tools::account::create_and_serialize_account_signed;
 
 use crate::{
+    addins::voter_weight::VoterWeightAction,
     error::GovernanceError,
     state::{
         enums::GovernanceAccountType,
@@ -103,6 +104,8 @@ pub fn process_cast_vote(
         account_info_iter,
         realm_info.key,
         &realm_data,
+        VoterWeightAction::CastVote,
+        proposal_info.key,
     )?;
 
     proposal_data.assert_valid_vote(&vote)?;
@@ -135,14 +138,17 @@ pub fn process_cast_vote(
         &realm_data,
         clock.unix_timestamp,
     )? {
+        // Deserialize proposal owner and validate it's the actual owner of the proposal
+        let mut proposal_owner_record_data = get_token_owner_record_data_for_proposal_owner(
+            program_id,
+            proposal_owner_record_info,
+            &proposal_data.token_owner_record,
+        )?;
+
+        // If the voter is also the proposal owner then update the voter record which is serialized for the voter later on
         if proposal_owner_record_info.key == voter_token_owner_record_info.key {
             voter_token_owner_record_data.decrease_outstanding_proposal_count();
         } else {
-            let mut proposal_owner_record_data = get_token_owner_record_data_for_proposal_owner(
-                program_id,
-                proposal_owner_record_info,
-                &proposal_data.token_owner_record,
-            )?;
             proposal_owner_record_data.decrease_outstanding_proposal_count();
             proposal_owner_record_data
                 .serialize(&mut *proposal_owner_record_info.data.borrow_mut())?;
