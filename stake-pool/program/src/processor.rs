@@ -37,6 +37,8 @@ use {
 
 /// Minimum deposit
 pub const MINIMUM_DEPOSIT: u64 = LAMPORTS_PER_SOL / 1000;
+/// Minimum liquidity deposit
+pub const MINIMUM_LIQUIDITY_DEPOSIT: u64 = MINIMUM_DEPOSIT * 1000;
 
 /// Deserialize the stake state from AccountInfo
 fn get_stake_state(
@@ -1307,6 +1309,14 @@ impl Processor {
         }
 
         let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeState>());
+
+        if let None = reserve_stake_account_info
+            .lamports()
+            .saturating_sub(stake_rent)
+            .checked_sub(stake_pool.total_lamports_liquidity) {
+            return Err(StakePoolError::SolLessThanLiquiditySol.into());
+        }
+
         if lamports < MINIMUM_ACTIVE_STAKE {
             msg!(
                 "Need more than {} lamports for transient stake to be rent-exempt and mergeable, {} provided",
@@ -1319,13 +1329,15 @@ impl Processor {
         // the stake account rent exemption is withdrawn after the merge, so
         let total_lamports = lamports.saturating_add(stake_rent);
 
-        if reserve_stake_account_info
+        let reserve_stake_account_lamports = reserve_stake_account_info
             .lamports()
+            .saturating_sub(stake_pool.total_lamports_liquidity);
+        
+        if reserve_stake_account_lamports
             .saturating_sub(total_lamports)
             <= stake_rent
         {
-            let max_split_amount = reserve_stake_account_info
-                .lamports()
+            let max_split_amount = reserve_stake_account_lamports
                 .saturating_sub(2 * stake_rent);
             msg!(
                 "Reserve stake does not have enough lamports for increase, must be less than {}, {} requested",
@@ -1754,6 +1766,9 @@ impl Processor {
                     .checked_add(validator_stake_record.stake_lamports())
                     .ok_or(StakePoolError::CalculationFailure)?;
             }
+            total_lamports = total_lamports
+                .checked_sub(stake_pool.total_lamports_liquidity)
+                .ok_or(StakePoolError::CalculationFailure)?;
 
             let reward_lamports = total_lamports.saturating_sub(previous_lamports);
 
@@ -1831,18 +1846,15 @@ impl Processor {
             let pool_mint = Mint::unpack_from_slice(&pool_mint_info.data.borrow())?;
             stake_pool.pool_token_supply = pool_mint.supply;
 
-            let active_total_lamports = stake_pool
-                .calc_active_total_lamports()
-                .ok_or(StakePoolError::CalculationFailure)?;
-            stake_pool.rate_of_exchange = if active_total_lamports == stake_pool.pool_token_supply    // TODO  TODO TODO TODO TODO Если 1 лампорт и 2 токена !!!!!!!!!!!!!!!!!
+            stake_pool.rate_of_exchange = if stake_pool.total_lamports == stake_pool.pool_token_supply    // TODO  TODO TODO TODO TODO Если 1 лампорт и 2 токена !!!!!!!!!!!!!!!!!
             || stake_pool.pool_token_supply == 0
-            || active_total_lamports == 0
+            || stake_pool.total_lamports == 0
             {
                 None
             } else {
                 Some(RateOfExchange {
                     denominator: stake_pool.pool_token_supply,
-                    numerator: active_total_lamports,
+                    numerator: stake_pool.total_lamports,
                 })
             };
 
@@ -2897,12 +2909,11 @@ impl Processor {
         )?;
         stake_pool.check_sol_deposit_authority(sol_deposit_authority_info)?;
         stake_pool.check_reserve_stake(reserve_stake_account_info)?;
-
         stake_pool.check_manager(manager_info)?;
 
         check_system_program(system_program_info.key)?;
 
-        if deposit_lamports < MINIMUM_DEPOSIT {
+        if deposit_lamports < MINIMUM_LIQUIDITY_DEPOSIT {
             return Err(StakePoolError::DepositTooSmall.into());
         }
 
@@ -2913,13 +2924,82 @@ impl Processor {
             deposit_lamports,
         )?;
 
-        stake_pool.total_lamports = stake_pool
-            .total_lamports
-            .checked_add(deposit_lamports)
-            .ok_or(StakePoolError::CalculationFailure)?;
         stake_pool.total_lamports_liquidity = stake_pool
             .total_lamports_liquidity
             .checked_add(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+    
+    /// Processes [WithdrawLiquiditySol](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_withdraw_liquidity_sol(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        withdraw_lamports: u64,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let reserve_stake_account_info = next_account_info(account_info_iter)?;
+        let to_user_lamports_info = next_account_info(account_info_iter)?;
+        let clock_info = next_account_info(account_info_iter)?;
+        let stake_history_info = next_account_info(account_info_iter)?;
+        let stake_program_info = next_account_info(account_info_iter)?;
+        let sol_withdraw_authority_info = next_account_info(account_info_iter);
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+        stake_pool.check_sol_withdraw_authority(sol_withdraw_authority_info)?;
+        stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+        stake_pool.check_manager(manager_info)?;
+        check_stake_program(stake_program_info.key)?;
+        
+        if withdraw_lamports > stake_pool.total_lamports_liquidity {
+            return Err(StakePoolError::LiquiditySolWithdrawalTooLargeAtAll.into());
+        }
+        let rent = Rent::get()?;
+        let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeState>());
+        if let None = reserve_stake_account_info
+            .lamports()
+            .saturating_sub(stake_rent)
+            .checked_sub(withdraw_lamports) {
+            return Err(StakePoolError::LiquiditySolWithdrawalTooLargeAtTime.into());
+        }
+ 
+        Self::stake_withdraw(
+            stake_pool_info.key,
+            reserve_stake_account_info.clone(),
+            withdraw_authority_info.clone(),
+            AUTHORITY_WITHDRAW,
+            stake_pool.stake_withdraw_bump_seed,
+            to_user_lamports_info.clone(),
+            clock_info.clone(),
+            stake_history_info.clone(),
+            stake_program_info.clone(),
+            withdraw_lamports,
+        )?;
+
+        stake_pool.total_lamports_liquidity = stake_pool
+            .total_lamports_liquidity
+            .checked_sub(withdraw_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
@@ -3060,6 +3140,10 @@ impl Processor {
                 msg!("Instruction: DepositLiquiditySol");
                 Self::process_deposit_liquidity_sol(program_id, accounts, lamports)
             }
+            StakePoolInstruction::WithdrawLiquiditySol(lamports) => {
+                msg!("Instruction: WithdrawLiquiditySol");
+                Self::process_withdraw_liquidity_sol(program_id, accounts, lamports)
+            }
         }
     }
 }
@@ -3108,6 +3192,9 @@ impl PrintProgramError for StakePoolError {
             StakePoolError::TransientAccountInUse => msg!("Error: Provided validator stake account already has a transient stake account in use"),
             StakePoolError::InvalidSolWithdrawAuthority => msg!("Error: Provided sol withdraw authority does not match the program's"),
             StakePoolError::SolWithdrawalTooLarge => msg!("Error: Too much SOL withdrawn from the stake pool's reserve account"),
+            StakePoolError::LiquiditySolWithdrawalTooLargeAtAll => msg!("Error: Too much liquidity SOL withdrawn from the stake pool's reserve account, stake pool does not have such liquidity at all"),
+            StakePoolError::LiquiditySolWithdrawalTooLargeAtTime => msg!("Error: Too much liquidity SOL withdrawn from the stake pool's reserve account, stake pool's reserve account does not have such liquidity at time"),
+            StakePoolError::SolLessThanLiquiditySol => msg!("Error: The number of sol on the stake pool's reserve account is less than the number of liquidity sol"),
         }
     }
 }

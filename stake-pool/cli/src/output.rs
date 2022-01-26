@@ -243,6 +243,7 @@ pub(crate) struct CliStakePoolDetails {
     pub minimum_reserve_stake_balance: u64,
     pub stake_accounts: Vec<CliStakePoolStakeAccountInfo>,
     pub total_lamports: u64,
+    pub total_liquidity_lamports: u64,
     pub total_pool_tokens: f64,
     pub current_number_of_validators: u32,
     pub max_number_of_validators: u32,
@@ -302,6 +303,11 @@ impl VerboseDisplay for CliStakePoolDetails {
             "Reserve Account: {}\tAvailable Balance: {}",
             &self.reserve_stake_account_address,
             Sol(self.reserve_stake_lamports - self.minimum_reserve_stake_balance),
+        )?;
+        writeln!(
+            w,
+            "Liquidity Balance: {}",
+            Sol(self.total_liquidity_lamports)
         )?;
         for stake_account in &self.stake_accounts {
             writeln!(

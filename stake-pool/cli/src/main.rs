@@ -595,6 +595,14 @@ fn command_increase_validator_stake(
         .find(vote_account)
         .ok_or("Vote account not found in validator list")?;
 
+    let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    if let None = config.rpc_client
+        .get_balance(&stake_pool.reserve_stake)?
+        .saturating_sub(stake_rent)
+        .checked_sub(stake_pool.total_lamports_liquidity) {
+        return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
+    }
+
     let mut signers = vec![config.fee_payer.as_ref(), config.staker.as_ref()];
     unique_signers!(signers);
     let transaction = checked_transaction_with_signers(
@@ -1146,6 +1154,9 @@ fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
         .collect();
     let total_pool_tokens =
         spl_token::amount_to_ui_amount(stake_pool.pool_token_supply, pool_mint.decimals);
+    
+        let total_liquidity_lamports = stake_pool.total_lamports_liquidity;
+
     let mut cli_stake_pool = CliStakePool::from((
         *stake_pool_address,
         stake_pool,
@@ -1156,6 +1167,7 @@ fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
     let cli_stake_pool_details = CliStakePoolDetails {
         reserve_stake_account_address,
         reserve_stake_lamports: reserve_stake.lamports,
+        total_liquidity_lamports,
         minimum_reserve_stake_balance,
         stake_accounts: cli_stake_pool_stake_account_infos,
         total_lamports,
@@ -1434,7 +1446,7 @@ fn command_withdraw_stake(
         let stake_account = config.rpc_client.get_account(&stake_account_address)?;
 
         let available_for_withdrawal = stake_pool
-            .convert_amount_of_pool_tokens_to_amount_of_lamports(
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(
                 stake_account
                     .lamports
                     .saturating_sub(MINIMUM_ACTIVE_STAKE)
@@ -1444,7 +1456,7 @@ fn command_withdraw_stake(
 
         if available_for_withdrawal < pool_amount {
             return Err(format!(
-                "Not enough lamports available for withdrawal from {}, {} asked, {} available",
+                "Not enough pool tokens available for withdrawal from {}, {} asked, {} available",
                 stake_account_address, pool_amount, available_for_withdrawal
             )
             .into());
@@ -1907,7 +1919,6 @@ fn command_deposit_liquidity_sol(
 
     let amount = native_token::sol_to_lamports(amount);
 
-    // Check withdraw_from balance
     let from_pubkey = from
         .as_ref()
         .map_or_else(|| config.fee_payer.pubkey(), |keypair| keypair.pubkey());
@@ -1921,18 +1932,25 @@ fn command_deposit_liquidity_sol(
         .into());
     }
 
+    if amount < spl_stake_pool::processor::MINIMUM_LIQUIDITY_DEPOSIT {
+        return Err(format!(
+            "Amount is less than the minimum deposit. Amount is {} SOL.\nMinimum deposit amount is {} SOL.",
+            Sol(amount),
+            Sol(spl_stake_pool::processor::MINIMUM_LIQUIDITY_DEPOSIT)
+        )
+        .into());
+    }
+
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
 
     let mut instructions: Vec<Instruction> = vec![];
 
-    // ephemeral SOL account just to do the transfer
     let user_sol_transfer = Keypair::new();
     let mut signers = vec![config.fee_payer.as_ref(), &user_sol_transfer, config.manager.as_ref()];
     if let Some(keypair) = from.as_ref() {
         signers.push(keypair)
     }
 
-    // Create the ephemeral SOL account
     instructions.push(system_instruction::transfer(
         &from_pubkey,
         &user_sol_transfer.pubkey(),
@@ -1991,6 +2009,128 @@ fn command_deposit_liquidity_sol(
     unique_signers!(signers);
     transaction.sign(&signers, recent_blockhash);
     send_transaction(config, transaction)?;
+    Ok(())
+}
+
+fn command_withdraw_liquidity_sol(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    sol_receiver: &Pubkey,
+    amount: f64,
+) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+    let amount = native_token::sol_to_lamports(amount);
+
+    if amount > stake_pool.total_lamports_liquidity {
+        return Err(format!(
+            "Not enough sol liquidity balance to withdraw {} SOL.\nMaximum withdraw amount is {} SOL.",
+            Sol(amount),
+            Sol(stake_pool.total_lamports_liquidity)
+        )
+        .into());
+    }
+
+    let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    if let None = config.rpc_client
+        .get_balance(&stake_pool.reserve_stake)?
+        .saturating_sub(stake_rent)
+        .checked_sub(amount) {
+        return Err(format!(
+            "Not enough balance to withdraw {} SOL. Please, at first restore the sol liquidity balance on the stake pool reserve account.",
+            Sol(amount)
+        ).into());
+    }
+
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        config.manager.as_ref()
+    ];
+    
+    let mut instructions = vec![];
+
+    let pool_withdraw_authority =
+        find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
+
+    let withdraw_instruction = if let Some(withdraw_authority) = config.funding_authority.as_ref() {
+        let expected_sol_withdraw_authority =
+            stake_pool.sol_withdraw_authority.ok_or_else(|| {
+                "SOL withdraw authority specified in arguments but stake pool has none".to_string()
+            })?;
+        signers.push(withdraw_authority.as_ref());
+        if withdraw_authority.pubkey() != expected_sol_withdraw_authority {
+            let error = format!(
+                "Invalid deposit withdraw specified, expected {}, received {}",
+                expected_sol_withdraw_authority,
+                withdraw_authority.pubkey()
+            );
+            return Err(error.into());
+        }
+
+        spl_stake_pool::instruction::withdraw_liquidity_sol_with_authority(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &config.manager.pubkey(),
+            &withdraw_authority.pubkey(),
+            &pool_withdraw_authority,
+            &stake_pool.reserve_stake,
+            sol_receiver,
+            amount,
+        )
+    } else {
+        spl_stake_pool::instruction::withdraw_liquidity_sol(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &config.manager.pubkey(),
+            &pool_withdraw_authority,
+            &stake_pool.reserve_stake,
+            sol_receiver,
+            amount,
+        )
+    };
+
+    instructions.push(withdraw_instruction);
+
+    let mut transaction =
+        Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
+
+    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
+    check_fee_payer_balance(config, fee_calculator.calculate_fee(transaction.message()))?;
+    unique_signers!(signers);
+    transaction.sign(&signers, recent_blockhash);
+    send_transaction(config, transaction)?;
+    Ok(())
+}
+
+fn command_distribute_stake(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    only_from_reserve: bool
+) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+    let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+
+    // let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    // if let None = config.rpc_client
+    //     .get_balance(&stake_pool.reserve_stake)?
+    //     .saturating_sub(stake_rent)
+    //     .checked_sub(stake_pool.total_lamports_liquidity) {
+    //     return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
+    // }
+
+    for v in validator_list.validators.into_iter() {
+        println!("{}", v.active_stake_lamports)
+    }
+
+
+
     Ok(())
 }
 
@@ -2906,6 +3046,55 @@ fn main() {
                     .help("Source account of funds. [default: cli config keypair]"),
             )
         )
+        .subcommand(SubCommand::with_name("withdraw-liquidity-sol")
+            .about("Withdraw SOL from the stake pool liquidity")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address."),
+            )
+            .arg(
+                Arg::with_name("sol_receiver")
+                    .index(2)
+                    .validator(is_valid_pubkey)
+                    .value_name("SYSTEM_ACCOUNT_ADDRESS_OR_KEYPAIR")
+                    .takes_value(true)
+                    .required(true)
+                    .help("System account to receive SOL from the stake pool. Defaults to the payer."),
+            )
+            .arg(
+                Arg::with_name("amount")
+                    .index(3)
+                    .validator(is_amount)
+                    .value_name("AMOUNT")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Amount of Sol to withdraw."),
+            )
+        )
+        .subcommand(SubCommand::with_name("distribute-stake")
+            .about("Distribute stake across existing validators")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address."),
+            )
+            .arg(
+                Arg::with_name("only-from-reserve")
+                    .long("only-from-reserve")
+                    .takes_value(false)
+                    .help("Distribution of funds stored on the stake pool`s reserve account only"),
+
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -3309,6 +3498,36 @@ fn main() {
                 &stake_pool_address,
                 &from,
                 amount,
+            )
+        }
+        ("withdraw-liquidity-sol", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let amount = value_t_or_exit!(arg_matches, "amount", f64);
+            let sol_receiver = get_signer(
+                arg_matches,
+                "sol_receiver",
+                &cli_config.keypair_path,
+                &mut wallet_manager,
+                SignerFromPathConfig {
+                    allow_null_signer: true,
+                },
+            )
+            .pubkey();
+            command_withdraw_liquidity_sol(
+                &config,
+                &stake_pool_address,
+                &sol_receiver,
+                amount,
+            )
+        }
+        ("distribute-stake", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let only_from_reserve = arg_matches.is_present("only-from-reserve");
+
+            command_distribute_stake(
+                &config,
+                &stake_pool_address,
+                only_from_reserve
             )
         }
         _ => unreachable!(),

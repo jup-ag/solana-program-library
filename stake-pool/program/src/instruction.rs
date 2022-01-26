@@ -398,17 +398,29 @@ pub enum StakePoolInstruction {
         space: u64,
     },
     
-    ///   Deposit SOL directly into the pool's reserve account. The output is a "pool" token
-    ///   representing ownership into the pool. Inputs are converted to the current ratio.
+    ///   Deposit SOL directly into the pool's reserve account to increase liquidity
     ///
     ///   0. `[w]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[]` Stake pool withdraw authority
     ///   3. `[w]` Reserve stake account, to deposit SOL
-    ///   4. `[s]` Account providing the lamports to be deposited into the pool
+    ///   4. `[ws]` Account providing the lamports to be deposited into the pool
     ///   5. `[]` System program account
     ///   6. `[s]` (Optional) Stake pool sol deposit authority.
     DepositLiquiditySol(u64),
+
+    ///   Withdraw SOL directly from the pool's reserve account to decrease liquidity
+    ///
+    ///   0. `[w]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[]` Stake pool withdraw authority
+    ///   3. `[w]` Reserve stake account, to withdraw  SOL
+    ///   4. `[w]` Account receiving the lamports from the reserve
+    ///   5. '[]' Clock sysvar
+    ///   6. '[]' Stake history sysvar
+    ///   7. `[]` Stake program account
+    ///   8. `[s]` (Optional) Stake pool sol withdraw authority
+    WithdrawLiquiditySol(u64),
 }
 
 /// Creates an 'initialize' instruction.
@@ -1401,6 +1413,68 @@ pub fn deposit_liquidity_sol_with_authority(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::DepositLiquiditySol(amount)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instructions required to withdraw SOL directly from stake pool liquidity.
+pub fn withdraw_liquidity_sol(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    lamports_to: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*lamports_to, false),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
+        AccountMeta::new_readonly(sysvar::stake_history::id(), false),
+        AccountMeta::new_readonly(stake::program::id(), false),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::WithdrawLiquiditySol(amount)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instruction required to withdraw SOL directly from stake pool liquidity.
+/// The difference with `deposit_liquidity_sol()` is that a deposit
+/// authority must sign this instruction.
+pub fn withdraw_liquidity_sol_with_authority(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    sol_withdraw_authority: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    lamports_to: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*lamports_to, false),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
+        AccountMeta::new_readonly(sysvar::stake_history::id(), false),
+        AccountMeta::new_readonly(stake::program::id(), false),
+        AccountMeta::new_readonly(*sol_withdraw_authority, true),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::WithdrawLiquiditySol(amount)
             .try_to_vec()
             .unwrap(),
     }

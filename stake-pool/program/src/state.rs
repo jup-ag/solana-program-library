@@ -276,12 +276,6 @@ impl StakePool {
         self.convert_amount_of_lamports_to_amount_of_pool_tokens(u64::try_from(fee_lamports).ok()?)
     }
 
-    /// Calculate total lamports wich should take rewards
-    #[inline]
-    pub fn calc_active_total_lamports(&self) -> Option<u64> {
-        self.total_lamports.checked_sub(self.total_lamports_liquidity)
-    }
-
     /// Checks that the withdraw or deposit authority is valid
     fn check_program_derived_authority(
         authority_address: &Pubkey,
