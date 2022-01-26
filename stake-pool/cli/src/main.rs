@@ -269,6 +269,12 @@ fn command_create_pool(
     let pool_fee_account_balance = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?;
+    let treasury_fee_account_balance = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?;
+    let validatiors_fee_account_balance = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?;
     let stake_pool_account_lamports = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(get_packed_len::<StakePool>())?;
@@ -280,6 +286,8 @@ fn command_create_pool(
     let mut total_rent_free_balances = reserve_stake_balance
         + mint_account_balance
         + pool_fee_account_balance
+        + treasury_fee_account_balance
+        + validatiors_fee_account_balance
         + stake_pool_account_lamports
         + validator_list_balance;
 
@@ -2134,6 +2142,57 @@ fn command_distribute_stake(
     Ok(())
 }
 
+fn command_check_accounts_for_rent_exempt(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+) -> CommandResult {
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+
+    if config.rpc_client.get_balance(stake_pool_address)? <
+    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(stake_pool_address)?.len())? {
+        println!("Stake pool account with address {} is not rent-exempt", stake_pool_address.to_string());
+    } else {
+        println!("Stake pool account is rent-exempt");
+    }
+
+    if config.rpc_client.get_balance(&stake_pool.reserve_stake)? <
+    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.reserve_stake)?.len())? {
+        println!("Reserve stake account with address {} is not rent-exempt", &stake_pool.reserve_stake.to_string());
+    } else {
+        println!("Reserve stake account is rent-exempt");
+    }
+
+    if config.rpc_client.get_balance(&stake_pool.pool_mint)? <
+    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.pool_mint)?.len())? {
+        println!("Pool mint account account with address {} is not rent-exempt", &stake_pool.pool_mint.to_string());
+    } else {
+        println!("Pool mint account is rent-exempt");
+    }
+
+    if config.rpc_client.get_balance(&stake_pool.treasury_fee_account)? <
+    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.treasury_fee_account)?.len())? {
+        println!("Treasury fee account account with address {} is not rent-exempt", &stake_pool.treasury_fee_account.to_string());
+    } else {
+        println!("Treasury fee account is rent-exempt");
+    }
+
+    if config.rpc_client.get_balance(&stake_pool.validator_fee_account)? <
+    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.validator_fee_account)?.len())? {
+        println!("Validator`s fee account account with address {} is not rent-exempt", &stake_pool.validator_fee_account.to_string());
+    } else {
+        println!("Validator`s fee account is rent-exempt");
+    }
+
+    if config.rpc_client.get_balance(&stake_pool.manager_fee_account)? <
+    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.manager_fee_account)?.len())? {
+        println!("Manager fee account account with address {} is not rent-exempt", &stake_pool.manager_fee_account.to_string());
+    } else {
+        println!("Manager fee account is rent-exempt");
+    }
+
+    Ok(())
+}
+
 fn main() {
     solana_logger::setup_with_default("solana=info");
 
@@ -3095,6 +3154,18 @@ fn main() {
 
             )
         )
+        .subcommand(SubCommand::with_name("check-accounts-for-rent-exempt")
+            .about("Check all stake pool`s accounts for rent exempt")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address."),
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -3527,7 +3598,15 @@ fn main() {
             command_distribute_stake(
                 &config,
                 &stake_pool_address,
-                only_from_reserve
+                only_from_reserve,
+            )
+        }
+        ("check-accounts-for-rent-exempt", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+
+            command_check_accounts_for_rent_exempt(
+                &config,
+                &stake_pool_address,
             )
         }
         _ => unreachable!(),
