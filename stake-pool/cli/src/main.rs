@@ -2859,6 +2859,26 @@ fn main() {
         .subcommand(SubCommand::with_name("list-all")
             .about("List information about all stake pools")
         )
+        .subcommand(SubCommand::with_name("reallocate-stake-pool-account-space")
+            .about("Reallocate space for stake pool account")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+            .arg(
+                Arg::with_name("from")
+                    .long("from")
+                    .validator(is_valid_signer)
+                    .value_name("KEYPAIR")
+                    .takes_value(true)
+                    .help("Source account of funds. [default: cli config keypair]"),
+            )
+        )
         .subcommand(SubCommand::with_name("deposit-liquidity-sol")
             .about("Deposit SOL into the stake pool liquidity")
             .arg(
@@ -2876,26 +2896,6 @@ fn main() {
                     .value_name("AMOUNT")
                     .takes_value(true)
                     .help("Amount in SOL to deposit into the stake pool reserve account."),
-            )
-            .arg(
-                Arg::with_name("from")
-                    .long("from")
-                    .validator(is_valid_signer)
-                    .value_name("KEYPAIR")
-                    .takes_value(true)
-                    .help("Source account of funds. [default: cli config keypair]"),
-            )
-        )
-        .subcommand(SubCommand::with_name("reallocate-stake-pool-account-space")
-            .about("Reallocate space for stake pool account")
-            .arg(
-                Arg::with_name("pool")
-                    .index(1)
-                    .validator(is_pubkey)
-                    .value_name("POOL_ADDRESS")
-                    .takes_value(true)
-                    .required(true)
-                    .help("Stake pool address"),
             )
             .arg(
                 Arg::with_name("from")
