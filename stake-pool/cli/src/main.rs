@@ -1980,6 +1980,35 @@ fn command_withdraw_liquidity_sol(
     Ok(())
 }
 
+fn command_distribute_stake(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    only_from_reserve: bool
+) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+    let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+
+    // let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    // if let None = config.rpc_client
+    //     .get_balance(&stake_pool.reserve_stake)?
+    //     .saturating_sub(stake_rent)
+    //     .checked_sub(stake_pool.total_lamports_liquidity) {
+    //     return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
+    // }
+
+    for v in validator_list.validators.into_iter() {
+        println!("{}", v.active_stake_lamports)
+    }
+
+
+
+    Ok(())
+}
+
 fn main() {
     solana_logger::setup_with_default("solana=info");
 
@@ -2895,6 +2924,25 @@ fn main() {
                     .help("Amount of Sol to withdraw."),
             )
         )
+        .subcommand(SubCommand::with_name("distribute-stake")
+            .about("Distribute stake across existing validators")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address."),
+            )
+            .arg(
+                Arg::with_name("only-from-reserve")
+                    .long("only-from-reserve")
+                    .takes_value(false)
+                    .help("Distribution of funds stored on the stake pool`s reserve account only"),
+
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -3307,6 +3355,16 @@ fn main() {
                 &stake_pool_address,
                 &sol_receiver,
                 amount,
+            )
+        }
+        ("distribute-stake", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let only_from_reserve = arg_matches.is_present("only-from-reserve");
+
+            command_distribute_stake(
+                &config,
+                &stake_pool_address,
+                only_from_reserve
             )
         }
         _ => unreachable!(),
