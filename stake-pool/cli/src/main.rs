@@ -1819,6 +1819,82 @@ fn command_list_all_pools(config: &Config) -> CommandResult {
     Ok(())
 }
 
+fn command_reallocate_stake_pool_account_space(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    from: &Option<Keypair>,
+) -> CommandResult {
+
+    // Check withdraw_from balance
+    let from_pubkey = from
+        .as_ref()
+        .map_or_else(|| config.fee_payer.pubkey(), |keypair| keypair.pubkey());
+    let from_balance = config.rpc_client.get_balance(&from_pubkey)?;
+
+    let amount: u64 = 10000000; // TODO
+
+    if from_balance < amount {
+        return Err(format!(
+            "Not enough SOL to deposit into pool: {}.\nMaximum deposit amount is {} SOL.",
+            Sol(amount),
+            Sol(from_balance)
+        )
+        .into());
+    }
+
+    // let new_space_size = get_packed_len::<StakePool>(); // TODO подсчитать Солы для рентексемпт
+    let new_space_size = 856;
+
+
+
+
+
+
+
+
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+
+    let mut instructions: Vec<Instruction> = vec![];
+
+    // ephemeral SOL account just to do the transfer
+    let user_sol_transfer = Keypair::new();
+    let mut signers = vec![config.fee_payer.as_ref(), config.manager.as_ref()];     //solana program deploy /solana-program-library/source/target/deploy/spl_stake_pool.so
+    if let Some(keypair) = from.as_ref() {
+        signers.push(keypair)
+    }
+
+    // // Create the ephemeral SOL account
+    // instructions.push(system_instruction::transfer(
+    //     &from_pubkey,
+    //     &user_sol_transfer.pubkey(),
+    //     amount,
+    // ));
+
+    let reallocate_stake_pool_account_space_instruction = spl_stake_pool::instruction::reallocate_stake_pool_account_space(
+        &spl_stake_pool::id(),
+        &stake_pool_address,
+        &config.manager.pubkey(),
+        &from_pubkey,    // &user_sol_transfer.pubkey(),
+        amount,
+        new_space_size as u64
+    );
+
+    instructions.push(reallocate_stake_pool_account_space_instruction);
+
+    let mut transaction =
+        Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
+
+    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
+    check_fee_payer_balance(
+        config,
+        fee_calculator.calculate_fee(transaction.message()),
+    )?;
+    unique_signers!(signers);
+    transaction.sign(&signers, recent_blockhash);
+    send_transaction(config, transaction)?;
+    Ok(())
+}
+
 fn command_deposit_liquidity_sol(
     config: &Config,
     stake_pool_address: &Pubkey,
@@ -1903,82 +1979,6 @@ fn command_deposit_liquidity_sol(
     };
 
     instructions.push(deposit_instruction);
-
-    let mut transaction =
-        Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
-
-    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
-    check_fee_payer_balance(
-        config,
-        fee_calculator.calculate_fee(transaction.message()),
-    )?;
-    unique_signers!(signers);
-    transaction.sign(&signers, recent_blockhash);
-    send_transaction(config, transaction)?;
-    Ok(())
-}
-
-fn command_reallocate_stake_pool_account_space(
-    config: &Config,
-    stake_pool_address: &Pubkey,
-    from: &Option<Keypair>,
-) -> CommandResult {
-
-    // Check withdraw_from balance
-    let from_pubkey = from
-        .as_ref()
-        .map_or_else(|| config.fee_payer.pubkey(), |keypair| keypair.pubkey());
-    let from_balance = config.rpc_client.get_balance(&from_pubkey)?;
-
-    let amount: u64 = 10000000; // TODO
-
-    if from_balance < amount {
-        return Err(format!(
-            "Not enough SOL to deposit into pool: {}.\nMaximum deposit amount is {} SOL.",
-            Sol(amount),
-            Sol(from_balance)
-        )
-        .into());
-    }
-
-    // let new_space_size = get_packed_len::<StakePool>(); // TODO подсчитать Солы для рентексемпт
-    let new_space_size = 856;
-
-
-
-
-
-
-
-
-    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-
-    let mut instructions: Vec<Instruction> = vec![];
-
-    // ephemeral SOL account just to do the transfer
-    let user_sol_transfer = Keypair::new();
-    let mut signers = vec![config.fee_payer.as_ref(), config.manager.as_ref()];     //solana program deploy /solana-program-library/source/target/deploy/spl_stake_pool.so
-    if let Some(keypair) = from.as_ref() {
-        signers.push(keypair)
-    }
-
-    // // Create the ephemeral SOL account
-    // instructions.push(system_instruction::transfer(
-    //     &from_pubkey,
-    //     &user_sol_transfer.pubkey(),
-    //     amount,
-    // ));
-
-    let reallocate_stake_pool_account_space_instruction = spl_stake_pool::instruction::reallocate_stake_pool_account_space(
-        &spl_stake_pool::id(),
-        &stake_pool_address,
-        &config.manager.pubkey(),
-        &from_pubkey,    // &user_sol_transfer.pubkey(),
-        amount,
-        new_space_size as u64
-    );
-
-    instructions.push(reallocate_stake_pool_account_space_instruction);
 
     let mut transaction =
         Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
@@ -3291,6 +3291,15 @@ fn main() {
                 &referrer,
             )
         }
+        ("reallocate-stake-pool-account-space", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let from = keypair_of(arg_matches, "from");
+            command_reallocate_stake_pool_account_space(
+                &config,
+                &stake_pool_address,
+                &from,
+            )
+        }
         ("deposit-liquidity-sol", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             let from = keypair_of(arg_matches, "from");
@@ -3300,15 +3309,6 @@ fn main() {
                 &stake_pool_address,
                 &from,
                 amount,
-            )
-        }
-        ("reallocate-stake-pool-account-space", Some(arg_matches)) => {
-            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            let from = keypair_of(arg_matches, "from");
-            command_reallocate_stake_pool_account_space(
-                &config,
-                &stake_pool_address,
-                &from,
             )
         }
         _ => unreachable!(),

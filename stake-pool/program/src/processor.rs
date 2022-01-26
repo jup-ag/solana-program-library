@@ -2789,70 +2789,6 @@ impl Processor {
         Ok(())
     }
 
-    /// Processes [DepositLiquiditySol](enum.Instruction.html).
-    #[inline(never)] // needed to avoid stack size violation
-    fn process_deposit_liquidity_sol(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        deposit_lamports: u64,
-    ) -> ProgramResult {
-        let account_info_iter = &mut accounts.iter();
-        let stake_pool_info = next_account_info(account_info_iter)?;
-        let manager_info = next_account_info(account_info_iter)?;
-        let withdraw_authority_info = next_account_info(account_info_iter)?;
-        let reserve_stake_account_info = next_account_info(account_info_iter)?;
-        let from_user_lamports_info = next_account_info(account_info_iter)?;
-        let system_program_info = next_account_info(account_info_iter)?;
-        let sol_deposit_authority_info = next_account_info(account_info_iter);
-
-        check_account_owner(stake_pool_info, program_id)?;
-        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
-        if !stake_pool.is_valid() {
-            return Err(StakePoolError::InvalidState.into());
-        }
-
-        if stake_pool.last_update_epoch < Clock::get()?.epoch {
-            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
-        }
-
-        stake_pool.check_authority_withdraw(
-            withdraw_authority_info.key,
-            program_id,
-            stake_pool_info.key,
-        )?;
-        stake_pool.check_sol_deposit_authority(sol_deposit_authority_info)?;
-        stake_pool.check_reserve_stake(reserve_stake_account_info)?;
-
-        stake_pool.check_manager(manager_info)?;
-
-        check_system_program(system_program_info.key)?;
-
-        if deposit_lamports < MINIMUM_DEPOSIT {
-            return Err(StakePoolError::DepositTooSmall.into());
-        }
-
-        Self::sol_transfer(
-            from_user_lamports_info.clone(),
-            reserve_stake_account_info.clone(),
-            system_program_info.clone(),
-            deposit_lamports,
-        )?;
-
-        stake_pool.total_lamports = stake_pool
-            .total_lamports
-            .checked_add(deposit_lamports)
-            .ok_or(StakePoolError::CalculationFailure)?;
-        stake_pool.total_lamports_liquidity = stake_pool
-            .total_lamports_liquidity
-            .checked_add(deposit_lamports)
-            .ok_or(StakePoolError::CalculationFailure)?;
-
-        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
-
-        Ok(())
-    }
-
-
     /// Processes [ReallocateStakePoolAccountSpace](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_reallocate_stake_pool_account_space(
@@ -2924,6 +2860,69 @@ impl Processor {
         //     .ok_or(StakePoolError::CalculationFailure)?;
 
         // stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// Processes [DepositLiquiditySol](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_deposit_liquidity_sol(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        deposit_lamports: u64,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let reserve_stake_account_info = next_account_info(account_info_iter)?;
+        let from_user_lamports_info = next_account_info(account_info_iter)?;
+        let system_program_info = next_account_info(account_info_iter)?;
+        let sol_deposit_authority_info = next_account_info(account_info_iter);
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+        stake_pool.check_sol_deposit_authority(sol_deposit_authority_info)?;
+        stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+
+        stake_pool.check_manager(manager_info)?;
+
+        check_system_program(system_program_info.key)?;
+
+        if deposit_lamports < MINIMUM_DEPOSIT {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
+        Self::sol_transfer(
+            from_user_lamports_info.clone(),
+            reserve_stake_account_info.clone(),
+            system_program_info.clone(),
+            deposit_lamports,
+        )?;
+
+        stake_pool.total_lamports = stake_pool
+            .total_lamports
+            .checked_add(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.total_lamports_liquidity = stake_pool
+            .total_lamports_liquidity
+            .checked_add(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
 
         Ok(())
     }
@@ -3050,16 +3049,16 @@ impl Processor {
                 msg!("Instruction: WithdrawSol");
                 Self::process_withdraw_sol(program_id, accounts, pool_tokens)
             }
-            StakePoolInstruction::DepositLiquiditySol(lamports) => {
-                msg!("Instruction: DepositLiquiditySol");
-                Self::process_deposit_liquidity_sol(program_id, accounts, lamports)
-            }
             StakePoolInstruction::ReallocateStakePoolAccountSpace {
                 lamports,
                 space,
             } => {
                 msg!("Instruction: ReallocateStakePoolAccountSpace");
                 Self::process_reallocate_stake_pool_account_space(program_id, accounts, lamports, space)
+            }
+            StakePoolInstruction::DepositLiquiditySol(lamports) => {
+                msg!("Instruction: DepositLiquiditySol");
+                Self::process_deposit_liquidity_sol(program_id, accounts, lamports)
             }
         }
     }
