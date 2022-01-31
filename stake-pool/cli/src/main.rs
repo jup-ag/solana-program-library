@@ -48,6 +48,7 @@ use {
         MINIMUM_ACTIVE_STAKE,
     },
     std::cmp::Ordering,
+    std::str::FromStr,
     std::{process::exit, sync::Arc},
 };
 // use instruction::create_associated_token_account once ATA 1.0.5 is released
@@ -217,6 +218,97 @@ fn new_stake_account(
     );
 
     stake_receiver_keypair
+}
+
+#[derive(serde::Deserialize, Debug)]
+pub struct GetValidatorsApiResponse {
+    data: Vec<GetValidatorsData>,
+    #[allow(dead_code)]
+    meta_data: GetValidatorsMetaData
+}
+
+#[derive(serde::Deserialize, Debug)]
+pub struct GetValidatorsData {
+    #[allow(dead_code)]
+    name: String,
+    #[allow(dead_code)]
+    image: String,
+    #[allow(dead_code)]
+    node_pk: String,
+    apy: f64,
+    vote_pk: String,
+    total_active_stake: f64,
+    fee: f64,
+    #[allow(dead_code)]
+    score: i64,
+    skipped_slots: f64,
+    #[allow(dead_code)]
+    data_center: String,
+}
+
+#[allow(dead_code)]
+#[derive(serde::Deserialize, Debug)]
+pub struct GetValidatorsMetaData {
+    limit: i64,
+    offset: i64,
+    total_amount: u64
+}
+
+const VALIDATOR_MAXIMUM_FEE: f64 = 0.07;
+const VALIDATOR_MAXIMUM_SKIPPED_SLOTS: f64 = 0.1;
+const VALIDATOR_MINIMUM_APY: f64 = 0.06;
+const VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE: f64 = 1000.0;
+const VALIDATORS_QUANTITY: usize = 25;
+
+fn find_validators_by_rules() -> Result<Vec<Pubkey>, Error> {
+    let response = reqwest::blocking::get("https://api.stakesolana.app/v1/validators?sort=stake&desc=true&offset=25&limit=700")?;
+
+    let mut get_validator_api_response = serde_json::from_slice::<'_, GetValidatorsApiResponse>(&response.bytes()?[..])?;
+
+    let mut result: Vec<Pubkey> = vec![];
+
+    get_validator_api_response.data.sort_by(|a: &'_ GetValidatorsData, b: &'_ GetValidatorsData| -> Ordering {
+        if a.apy > b.apy {
+            return Ordering::Less;
+        } else {
+            if a.apy < b.apy {
+                return Ordering::Greater;
+            } else {
+                return Ordering::Equal;
+            }
+        }
+    });
+
+    for get_validtor_data in  get_validator_api_response.data.into_iter() {
+        if result.len() == VALIDATORS_QUANTITY {
+            return Ok(result);
+        }
+
+        if get_validtor_data.fee < VALIDATOR_MAXIMUM_FEE
+            && get_validtor_data.skipped_slots < VALIDATOR_MAXIMUM_SKIPPED_SLOTS
+            && get_validtor_data.apy > VALIDATOR_MINIMUM_APY
+            && get_validtor_data.total_active_stake > VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE
+        {
+            result.push(Pubkey::from_str(get_validtor_data.vote_pk.as_str())?);
+        }
+    }
+
+    return Ok(result);
+}
+
+fn get_existing_validators(
+    config: &Config,
+    validator_list_address: &Pubkey,
+) -> Result<Vec<Pubkey>, Error> {
+    let validator_list = get_validator_list(&config.rpc_client, validator_list_address)?;
+
+    let mut result: Vec<Pubkey> = vec![];
+
+    for validator_stake_info in validator_list.validators.into_iter() {
+        result.push(validator_stake_info.vote_account_address)
+    }
+
+    return Ok(result);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1845,6 +1937,7 @@ fn command_reallocate_stake_pool_account_space(
     stake_pool_address: &Pubkey,
     from: &Option<Keypair>,
 ) -> CommandResult {
+    todo!();
 
     // Check withdraw_from balance
     let from_pubkey = from
@@ -1864,7 +1957,7 @@ fn command_reallocate_stake_pool_account_space(
     }
 
     // let new_space_size = get_packed_len::<StakePool>(); // TODO подсчитать Солы для рентексемпт
-    let new_space_size = 856;
+    let new_space_size = 760;
 
 
 
@@ -2117,12 +2210,8 @@ fn command_withdraw_liquidity_sol(
 fn command_distribute_stake(
     config: &Config,
     stake_pool_address: &Pubkey,
-    only_from_reserve: bool
+    only_from_reserve: bool,
 ) -> CommandResult {
-    if !config.no_update {
-        command_update(config, stake_pool_address, false, false)?;
-    }
-
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
     let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
 
@@ -2138,8 +2227,79 @@ fn command_distribute_stake(
         println!("{}", v.active_stake_lamports)
     }
 
+    todo!();
 
+    Ok(())
+}
 
+fn command_change_validators(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+) -> CommandResult {
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+    let new_validators_vote_accounts = find_validators_by_rules()?;
+    let old_validators_vote_accounts = get_existing_validators(config, &stake_pool.validator_list)?;
+    let mut validators_to_be_added: Vec<&Pubkey> = vec![];
+    let mut validators_to_be_removed: Vec<&Pubkey> = vec![];
+
+    'new: for new_validators_vote in new_validators_vote_accounts.iter() {
+        validators_to_be_added.push(new_validators_vote);
+
+        for old_validators_vote in old_validators_vote_accounts.iter() {
+            if new_validators_vote.to_bytes()[..] == old_validators_vote.to_bytes()[..] {
+                validators_to_be_added.pop();
+
+                continue 'new;
+            }
+        }
+    }
+
+    'old: for old_validators_vote in old_validators_vote_accounts.iter() {
+        validators_to_be_removed.push(old_validators_vote);
+
+        for new_validators_vote in new_validators_vote_accounts.iter() {
+            if old_validators_vote.to_bytes()[..] == new_validators_vote.to_bytes()[..] {
+                validators_to_be_removed.pop();
+
+                continue 'old;
+            }
+        }
+    }
+
+    todo!();
+
+    Ok(())
+}
+
+fn command_withdraw_stake_for_subsequent_removing_validator(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    vote_account: &Pubkey,
+) -> CommandResult {
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+
+    let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+    let validator_stake_info = validator_list
+        .find(vote_account)
+        .ok_or("Vote account not found in validator list")?;
+
+    let mut signers = vec![config.fee_payer.as_ref(), config.staker.as_ref()];
+    unique_signers!(signers);
+    let transaction = checked_transaction_with_signers(
+        config,
+        &[
+            spl_stake_pool::instruction::decrease_validator_stake_with_vote(
+                &spl_stake_pool::id(),
+                &stake_pool,
+                stake_pool_address,
+                vote_account,
+                validator_stake_info.active_stake_lamports,
+                validator_stake_info.transient_seed_suffix_start,
+            ),
+        ],
+        &signers,
+    )?;
+    send_transaction(config, transaction)?;
     Ok(())
 }
 
@@ -3155,6 +3315,39 @@ fn main() {
 
             )
         )
+        .subcommand(SubCommand::with_name("change-validators")
+            .about("Take necessary validators and change stake pool`s validator list")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address."),
+            )
+        )
+        .subcommand(SubCommand::with_name("withdraw-stake-for-subsequent-removing-validator")
+            .about("Withdraw so many stake from validator to be able to remove the validator in next epoch")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address."),
+            )
+            .arg(
+                Arg::with_name("vote_account")
+                    .index(2)
+                    .validator(is_pubkey)
+                    .value_name("VOTE_ACCOUNT_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("The validator vote account"),
+            )
+        )
         .subcommand(SubCommand::with_name("check-accounts-for-rent-exempt")
             .about("Check all stake pool`s accounts for rent exempt")
             .arg(
@@ -3602,9 +3795,24 @@ fn main() {
                 only_from_reserve,
             )
         }
+        ("change-validators", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            command_change_validators(
+                &config,
+                &stake_pool_address,
+            )
+        }
+        ("withdraw-stake-for-subsequent-removing-validator", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let vote_account_address = pubkey_of(arg_matches, "vote_account").unwrap();
+            command_withdraw_stake_for_subsequent_removing_validator(
+                &config,
+                &stake_pool_address,
+                &vote_account_address,
+            )
+        }
         ("check-accounts-for-rent-exempt", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-
             command_check_accounts_for_rent_exempt(
                 &config,
                 &stake_pool_address,
@@ -3617,3 +3825,22 @@ fn main() {
         exit(1);
     });
 }
+
+// Deleted: 7VGU4ZwR1e1AFekqbqv2gvjeg47e1PwMPm4BfLt6rxNk
+// Deleted: BeachiopjxQxL7CaHNSZsynApiZCKx9QFVtcWNz3jDBo
+// Deleted: 51JBzSTU5rAM8gLAVQKgp4WoZerQcSqWC7BitBzgUNAm
+// Deleted: 48gmQ5T8iht1aw2gjffWDu9wmnkxNingZHEx8XTVKrpe
+// Deleted: 2het6nBRLq9LLZER8fqUEk7j5pbLxq2mVGqSse2nS3tf
+// Deleted: 37BPVW1Ne1XHrzK15xguAS2BTdobVfThDzTE2mv8SsnJ
+// Deleted: 8HR5rCobbFMDe5EbgKdJLNDWVCeGG79w837BUxtsCngs
+// Deleted: 2Y2opv8Kq8zFATg6ipqb2AjgCf18tkv1CLMLXQGif2NH
+// Deleted: B6nDYYLc2iwYqY3zdmavMmU9GjUL2hf79MkufviM2bXv
+// Deleted: 4GAmUQ8FvKcTzeYGqxu2oSBMStYNwDTmBo7LC1Csg6SE
+// Deleted: 6W8yrMwtDU5G6ErazhZHfLjqZV8cMvajpSRGYgrZ3d4v
+// Deleted: C6RzXrzqXewJ5xsYpYPmveHh7A2UUkP1932FArXRSAzE
+// Deleted: GBU4potq4TjsmXCUSJXbXwnkYZP8725ZEaeDrLrdQhbA
+// Deleted: G8fLwPKzRD8HtStVtos65Cmiy6Jjs8Y4dNFRFcdSUhVj
+// Deleted: 76nwV8zz8tLz97SBRXH6uwHvgHXtqJDLQfF66jZhQ857
+// Deleted: 9c5bpzVRbfsYY2fannb4hyX5CJUPg3BfH2cL6sR7kJM4
+// Deleted: DQ7D6ZRtKbBSxCcAunEkoTzQhCBKLPdzTjPRRnM6wo1f
+// Deleted: GCmFQLKYTRCpoqTJkcwSDKp6VViyC63H2ADzjwozXMwY

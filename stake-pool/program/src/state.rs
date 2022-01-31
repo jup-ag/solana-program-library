@@ -846,8 +846,6 @@ impl FeeType {
             Self::StakeWithdrawal(_)
                 | Self::SolWithdrawal(_)
                 | Self::Epoch(_)
-                | Self::Treasury(_)
-                | Self::Validator(_)
         )
     }
 }

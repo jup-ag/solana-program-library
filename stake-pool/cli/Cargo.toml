@@ -28,6 +28,7 @@ spl-stake-pool = { version = "0.6", path="../program", features = [ "no-entrypoi
 spl-token = { version = "3.3", path="../../token/program", features = [ "no-entrypoint" ]  }
 bs58 = "0.4.0"
 bincode = "1.3.1"
+reqwest = { version = "0.11", features = ["blocking"] }
 
 [[bin]]
 name = "spl-stake-pool"
