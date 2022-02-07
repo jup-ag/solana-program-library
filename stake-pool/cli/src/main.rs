@@ -40,6 +40,7 @@ use {
     },
     spl_associated_token_account::get_associated_token_address,
     spl_stake_pool::state::ValidatorStakeInfo,
+    spl_stake_pool::state::StakeStatus,
     spl_stake_pool::{
         self, find_stake_program_address, find_transient_stake_program_address,
         find_withdraw_authority_program_address,
@@ -686,6 +687,16 @@ fn command_increase_validator_stake(
     amount: f64,
 ) -> CommandResult {
     let lamports = native_token::sol_to_lamports(amount);
+
+    increase_validator_stake(config, stake_pool_address, vote_account, lamports)
+}
+
+fn increase_validator_stake(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    vote_account: &Pubkey,
+    amount: u64,
+) -> CommandResult {
     if !config.no_update {
         command_update(config, stake_pool_address, false, false)?;
     }
@@ -714,7 +725,7 @@ fn command_increase_validator_stake(
                 &stake_pool,
                 stake_pool_address,
                 vote_account,
-                lamports,
+                amount,
                 validator_stake_info.transient_seed_suffix_start,
             ),
         ],
@@ -731,6 +742,15 @@ fn command_decrease_validator_stake(
     amount: f64,
 ) -> CommandResult {
     let lamports = native_token::sol_to_lamports(amount);
+    decrease_validator_stake(config, stake_pool_address, vote_account, lamports)
+}
+
+fn decrease_validator_stake(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    vote_account: &Pubkey,
+    amount: u64,
+) -> CommandResult {
     if !config.no_update {
         command_update(config, stake_pool_address, false, false)?;
     }
@@ -751,7 +771,7 @@ fn command_decrease_validator_stake(
                 &stake_pool,
                 stake_pool_address,
                 vote_account,
-                lamports,
+                amount,
                 validator_stake_info.transient_seed_suffix_start,
             ),
         ],
@@ -2212,22 +2232,52 @@ fn command_distribute_stake(
     stake_pool_address: &Pubkey,
     only_from_reserve: bool,
 ) -> CommandResult {
-    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-    let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
-
-    // let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
-    // if let None = config.rpc_client
-    //     .get_balance(&stake_pool.reserve_stake)?
-    //     .saturating_sub(stake_rent)
-    //     .checked_sub(stake_pool.total_lamports_liquidity) {
-    //     return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
-    // }
-
-    for v in validator_list.validators.into_iter() {
-        println!("{}", v.active_stake_lamports)
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
     }
 
-    todo!();
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+
+    let epoch = config.rpc_client.get_epoch_info()?.epoch;
+
+    let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+    let validators_quantity = validator_list.validators.len();
+    if validators_quantity == 0 {
+        return Ok(());
+    }
+
+    let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    if let None = config.rpc_client
+        .get_balance(&stake_pool.reserve_stake)?
+        .saturating_sub(stake_rent)
+        .checked_sub(stake_pool.total_lamports_liquidity) {
+        return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
+    }
+
+    // TODO DELEYE 
+    println!("can distrivute: {}", config.rpc_client        // TODO DELEYE 
+    .get_balance(&stake_pool.reserve_stake)?
+    .saturating_sub(stake_rent));
+
+    // TODO Score по API 
+
+    let validators_quantity = validator_list.validators.len() as u64;
+
+    let amount = config.rpc_client     // TODO считать аккуратно // MINIMUM_ACTIVE_STAKE нельзя класть меньше этого значения // Сюда еще идет +RentExcempt!!
+        .get_balance(&stake_pool.reserve_stake)?
+        .saturating_sub(stake_rent)
+        .saturating_sub(stake_pool.total_lamports_liquidity)
+        .checked_div(validators_quantity).unwrap();
+
+    for validator_stake_info in validator_list.validators.into_iter() {
+        if validator_stake_info.last_update_epoch == epoch
+            && validator_stake_info.status == StakeStatus::Active
+            && validator_stake_info.transient_stake_lamports == 0 {
+                increase_validator_stake(
+                    config, stake_pool_address, &validator_stake_info.vote_account_address, amount
+                )?;
+            }
+    }
 
     Ok(())
 }
@@ -2276,6 +2326,13 @@ fn command_withdraw_stake_for_subsequent_removing_validator(
     stake_pool_address: &Pubkey,
     vote_account: &Pubkey,
 ) -> CommandResult {
+    // Simulate result: Response { context: RpcResponseContext { slot: 118734932 }, value: RpcSimulateTransactionResult {
+    //  err: Some(InstructionError(0, AccountNotRentExempt)), logs: Some([“Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks invoke [1]“,
+    //      “Program log: Instruction: DecreaseValidatorStake”, “Program log: Need more than 2282880 lamports for transient stake to be rent-exempt, 
+    //      4607 provided”, “Program log: Error: AccountNotRentExempt”, “Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks consumed 16077 of 200000 
+    //      compute units”, “Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks failed: An account does not have enough lamports to be rent-exempt”]), 
+    //      accounts: None, units_consumed: None } }
+
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
 
     let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
@@ -2283,24 +2340,7 @@ fn command_withdraw_stake_for_subsequent_removing_validator(
         .find(vote_account)
         .ok_or("Vote account not found in validator list")?;
 
-    let mut signers = vec![config.fee_payer.as_ref(), config.staker.as_ref()];
-    unique_signers!(signers);
-    let transaction = checked_transaction_with_signers(
-        config,
-        &[
-            spl_stake_pool::instruction::decrease_validator_stake_with_vote(
-                &spl_stake_pool::id(),
-                &stake_pool,
-                stake_pool_address,
-                vote_account,
-                validator_stake_info.active_stake_lamports,
-                validator_stake_info.transient_seed_suffix_start,
-            ),
-        ],
-        &signers,
-    )?;
-    send_transaction(config, transaction)?;
-    Ok(())
+    decrease_validator_stake(config, stake_pool_address, vote_account, validator_stake_info.active_stake_lamports)
 }
 
 fn command_check_accounts_for_rent_exempt(
