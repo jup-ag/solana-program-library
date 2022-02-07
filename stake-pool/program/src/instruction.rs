@@ -383,20 +383,6 @@ pub enum StakePoolInstruction {
     ///  11. `[]` Token program id
     ///  12. `[s]` (Optional) Stake pool sol withdraw authority
     WithdrawSol(u64),
-
-    ///  Reallocate space in stake pool account
-    ///
-    ///   0. `[w]` Stake pool
-    ///   1. `[s]` Manager
-    ///   2. `[s]` Account providing the lamports to be deposited into the pool
-    ///   3. `[]` System program account
-    ///   4. `[]` System program account
-    ReallocateStakePoolAccountSpace {
-        /// Number of lamports to transfer to the new account
-        lamports: u64,
-        /// Number of bytes of memory to allocate
-        space: u64,
-    },
     
     ///   Deposit SOL directly into the pool's reserve account to increase liquidity
     ///
@@ -421,6 +407,15 @@ pub enum StakePoolInstruction {
     ///   7. `[]` Stake program account
     ///   8. `[s]` (Optional) Stake pool sol withdraw authority
     WithdrawLiquiditySol(u64),
+
+
+
+
+        ///   DELETE AFTER EXECUTION
+    ///
+    ///   0. `[w]` Stake pool
+    ///   1. `[s]` Manager
+    ChangeStructure,
 }
 
 /// Creates an 'initialize' instruction.
@@ -1333,33 +1328,6 @@ pub fn set_funding_authority(
     }
 }
 
-/// Creates instruction required to reallocate space in stake pool account
-pub fn reallocate_stake_pool_account_space(
-    program_id: &Pubkey,
-    stake_pool: &Pubkey,
-    manager: &Pubkey,
-    lamports_from: &Pubkey,
-    lamports: u64,
-    space: u64
-) -> Instruction {
-    let accounts = vec![
-        AccountMeta::new(*stake_pool, false),
-        AccountMeta::new_readonly(*manager, true),
-        AccountMeta::new(*lamports_from, true),
-        AccountMeta::new_readonly(*program_id, false),
-    ];
-    Instruction {
-        program_id: *program_id,
-        accounts,
-        data: StakePoolInstruction::ReallocateStakePoolAccountSpace {
-            lamports,
-            space,
-        }
-            .try_to_vec()
-            .unwrap(),
-    }
-}
-
 /// Creates instructions required to deposit SOL directly into a stake pool liquidity.
 pub fn deposit_liquidity_sol(
     program_id: &Pubkey,
@@ -1475,6 +1443,25 @@ pub fn withdraw_liquidity_sol_with_authority(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::WithdrawLiquiditySol(amount)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// DELETE
+pub fn change_structure(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::ChangeStructure
             .try_to_vec()
             .unwrap(),
     }

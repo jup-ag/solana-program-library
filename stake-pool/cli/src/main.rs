@@ -39,8 +39,8 @@ use {
         transaction::Transaction,
     },
     spl_associated_token_account::get_associated_token_address,
-    spl_stake_pool::state::ValidatorStakeInfo,
     spl_stake_pool::state::StakeStatus,
+    spl_stake_pool::state::ValidatorStakeInfo,
     spl_stake_pool::{
         self, find_stake_program_address, find_transient_stake_program_address,
         find_withdraw_authority_program_address,
@@ -56,6 +56,7 @@ use {
 // use instruction::create_associated_token_account once ATA 1.0.5 is released
 #[allow(deprecated)]
 use spl_associated_token_account::create_associated_token_account;
+use spl_stake_pool::state::StakePoolChanged;
 
 pub(crate) struct Config {
     rpc_client: RpcClient,
@@ -238,9 +239,10 @@ pub struct ValidatorComparableParameters {
 
 fn check_validator(validator_comparable_parameters: &ValidatorComparableParameters) -> bool {
     return validator_comparable_parameters.fee <= VALIDATOR_MAXIMUM_FEE
-            && validator_comparable_parameters.skipped_slots <= VALIDATOR_MAXIMUM_SKIPPED_SLOTS
-            && validator_comparable_parameters.apy >= VALIDATOR_MINIMUM_APY
-            && validator_comparable_parameters.total_active_stake >= VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE
+        && validator_comparable_parameters.skipped_slots <= VALIDATOR_MAXIMUM_SKIPPED_SLOTS
+        && validator_comparable_parameters.apy >= VALIDATOR_MINIMUM_APY
+        && validator_comparable_parameters.total_active_stake
+            >= VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE;
 }
 
 // DTO for https://api.stakesolana.app/v1/validators
@@ -248,7 +250,7 @@ fn check_validator(validator_comparable_parameters: &ValidatorComparableParamete
 pub struct ValidatorsApiResponse {
     data: Vec<ValidatorsData>,
     #[allow(dead_code)]
-    meta_data: ValidatorsMetaData
+    meta_data: ValidatorsMetaData,
 }
 
 // DTO for https://api.stakesolana.app/v1/validators
@@ -277,29 +279,34 @@ pub struct ValidatorsData {
 pub struct ValidatorsMetaData {
     limit: i64,
     offset: i64,
-    total_amount: u64
+    total_amount: u64,
 }
 
 fn get_necessary_validators_vote_account_pubkey() -> Result<Vec<Pubkey>, Error> {
-    let response = reqwest::blocking::get("https://api.stakesolana.app/v1/validators?sort=stake&desc=true&offset=25&limit=700")?;
+    let response = reqwest::blocking::get(
+        "https://api.stakesolana.app/v1/validators?sort=stake&desc=true&offset=25&limit=700",
+    )?;
 
-    let mut validator_api_response = serde_json::from_slice::<'_, ValidatorsApiResponse>(&response.bytes()?[..])?;
+    let mut validator_api_response =
+        serde_json::from_slice::<'_, ValidatorsApiResponse>(&response.bytes()?[..])?;
 
     let mut result: Vec<Pubkey> = vec![];
 
-    validator_api_response.data.sort_by(|a: &'_ ValidatorsData, b: &'_ ValidatorsData| -> Ordering {
-        if a.apy > b.apy {
-            return Ordering::Less;
-        } else {
-            if a.apy < b.apy {
-                return Ordering::Greater;
+    validator_api_response.data.sort_by(
+        |a: &'_ ValidatorsData, b: &'_ ValidatorsData| -> Ordering {
+            if a.apy > b.apy {
+                return Ordering::Less;
             } else {
-                return Ordering::Equal;
+                if a.apy < b.apy {
+                    return Ordering::Greater;
+                } else {
+                    return Ordering::Equal;
+                }
             }
-        }
-    });
+        },
+    );
 
-    for validtor_data in  validator_api_response.data.into_iter() {
+    for validtor_data in validator_api_response.data.into_iter() {
         if result.len() == VALIDATORS_QUANTITY {
             return Ok(result);
         }
@@ -308,11 +315,10 @@ fn get_necessary_validators_vote_account_pubkey() -> Result<Vec<Pubkey>, Error> 
             fee: validtor_data.fee,
             skipped_slots: validtor_data.skipped_slots,
             apy: validtor_data.apy,
-            total_active_stake: validtor_data.total_active_stake
+            total_active_stake: validtor_data.total_active_stake,
         };
 
-        if check_validator(&validator_comparable_parameters)
-        {
+        if check_validator(&validator_comparable_parameters) {
             result.push(Pubkey::from_str(validtor_data.vote_pk.as_str())?);
         }
     }
@@ -730,11 +736,15 @@ fn increase_validator_stake(
         .find(vote_account)
         .ok_or("Vote account not found in validator list")?;
 
-    let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
-    if let None = config.rpc_client
+    let stake_rent = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    if let None = config
+        .rpc_client
         .get_balance(&stake_pool.reserve_stake)?
         .saturating_sub(stake_rent)
-        .checked_sub(stake_pool.total_lamports_liquidity) {
+        .checked_sub(stake_pool.total_lamports_liquidity)
+    {
         return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
     }
 
@@ -1298,8 +1308,8 @@ fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
         .collect();
     let total_pool_tokens =
         spl_token::amount_to_ui_amount(stake_pool.pool_token_supply, pool_mint.decimals);
-    
-        let total_liquidity_lamports = stake_pool.total_lamports_liquidity;
+
+    let total_liquidity_lamports = stake_pool.total_lamports_liquidity;
 
     let mut cli_stake_pool = CliStakePool::from((
         *stake_pool_address,
@@ -1975,83 +1985,6 @@ fn command_list_all_pools(config: &Config) -> CommandResult {
     Ok(())
 }
 
-fn command_reallocate_stake_pool_account_space(
-    config: &Config,
-    stake_pool_address: &Pubkey,
-    from: &Option<Keypair>,
-) -> CommandResult {
-    todo!();
-
-    // Check withdraw_from balance
-    let from_pubkey = from
-        .as_ref()
-        .map_or_else(|| config.fee_payer.pubkey(), |keypair| keypair.pubkey());
-    let from_balance = config.rpc_client.get_balance(&from_pubkey)?;
-
-    let amount: u64 = 10000000; // TODO
-
-    if from_balance < amount {
-        return Err(format!(
-            "Not enough SOL to deposit into pool: {}.\nMaximum deposit amount is {} SOL.",
-            Sol(amount),
-            Sol(from_balance)
-        )
-        .into());
-    }
-
-    // let new_space_size = get_packed_len::<StakePool>(); // TODO подсчитать Солы для рентексемпт
-    let new_space_size = 760;
-
-
-
-
-
-
-
-
-    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-
-    let mut instructions: Vec<Instruction> = vec![];
-
-    // ephemeral SOL account just to do the transfer
-    let user_sol_transfer = Keypair::new();
-    let mut signers = vec![config.fee_payer.as_ref(), config.manager.as_ref()];     //solana program deploy /solana-program-library/source/target/deploy/spl_stake_pool.so
-    if let Some(keypair) = from.as_ref() {
-        signers.push(keypair)
-    }
-
-    // // Create the ephemeral SOL account
-    // instructions.push(system_instruction::transfer(
-    //     &from_pubkey,
-    //     &user_sol_transfer.pubkey(),
-    //     amount,
-    // ));
-
-    let reallocate_stake_pool_account_space_instruction = spl_stake_pool::instruction::reallocate_stake_pool_account_space(
-        &spl_stake_pool::id(),
-        &stake_pool_address,
-        &config.manager.pubkey(),
-        &from_pubkey,    // &user_sol_transfer.pubkey(),
-        amount,
-        new_space_size as u64
-    );
-
-    instructions.push(reallocate_stake_pool_account_space_instruction);
-
-    let mut transaction =
-        Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
-
-    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
-    check_fee_payer_balance(
-        config,
-        fee_calculator.calculate_fee(transaction.message()),
-    )?;
-    unique_signers!(signers);
-    transaction.sign(&signers, recent_blockhash);
-    send_transaction(config, transaction)?;
-    Ok(())
-}
-
 fn command_deposit_liquidity_sol(
     config: &Config,
     stake_pool_address: &Pubkey,
@@ -2091,7 +2024,11 @@ fn command_deposit_liquidity_sol(
     let mut instructions: Vec<Instruction> = vec![];
 
     let user_sol_transfer = Keypair::new();
-    let mut signers = vec![config.fee_payer.as_ref(), &user_sol_transfer, config.manager.as_ref()];
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        &user_sol_transfer,
+        config.manager.as_ref(),
+    ];
     if let Some(keypair) = from.as_ref() {
         signers.push(keypair)
     }
@@ -2147,10 +2084,7 @@ fn command_deposit_liquidity_sol(
         Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
 
     let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
-    check_fee_payer_balance(
-        config,
-        fee_calculator.calculate_fee(transaction.message()),
-    )?;
+    check_fee_payer_balance(config, fee_calculator.calculate_fee(transaction.message()))?;
     unique_signers!(signers);
     transaction.sign(&signers, recent_blockhash);
     send_transaction(config, transaction)?;
@@ -2179,22 +2113,23 @@ fn command_withdraw_liquidity_sol(
         .into());
     }
 
-    let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
-    if let None = config.rpc_client
+    let stake_rent = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    if let None = config
+        .rpc_client
         .get_balance(&stake_pool.reserve_stake)?
         .saturating_sub(stake_rent)
-        .checked_sub(amount) {
+        .checked_sub(amount)
+    {
         return Err(format!(
             "Not enough balance to withdraw {} SOL. Please, at first restore the sol liquidity balance on the stake pool reserve account.",
             Sol(amount)
         ).into());
     }
 
-    let mut signers = vec![
-        config.fee_payer.as_ref(),
-        config.manager.as_ref()
-    ];
-    
+    let mut signers = vec![config.fee_payer.as_ref(), config.manager.as_ref()];
+
     let mut instructions = vec![];
 
     let pool_withdraw_authority =
@@ -2269,37 +2204,51 @@ fn command_distribute_stake(
         return Ok(());
     }
 
-    let stake_rent = config.rpc_client.get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
-    if let None = config.rpc_client
+    let stake_rent = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    if let None = config
+        .rpc_client
         .get_balance(&stake_pool.reserve_stake)?
         .saturating_sub(stake_rent)
-        .checked_sub(stake_pool.total_lamports_liquidity) {
+        .checked_sub(stake_pool.total_lamports_liquidity)
+    {
         return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
     }
 
-    // TODO DELEYE 
-    println!("can distrivute: {}", config.rpc_client        // TODO DELEYE 
-    .get_balance(&stake_pool.reserve_stake)?
-    .saturating_sub(stake_rent));
+    // TODO DELEYE
+    println!(
+        "can distrivute: {}",
+        config
+            .rpc_client // TODO DELEYE
+            .get_balance(&stake_pool.reserve_stake)?
+            .saturating_sub(stake_rent)
+    );
 
-    // TODO Score по API 
+    // TODO Score по API
 
     let validators_quantity = validator_list.validators.len() as u64;
 
-    let amount = config.rpc_client     // TODO считать аккуратно // MINIMUM_ACTIVE_STAKE нельзя класть меньше этого значения // Сюда еще идет +RentExcempt!!
+    let amount = config
+        .rpc_client // TODO считать аккуратно // MINIMUM_ACTIVE_STAKE нельзя класть меньше этого значения // Сюда еще идет +RentExcempt!!
         .get_balance(&stake_pool.reserve_stake)?
         .saturating_sub(stake_rent)
         .saturating_sub(stake_pool.total_lamports_liquidity)
-        .checked_div(validators_quantity).unwrap();
+        .checked_div(validators_quantity)
+        .unwrap();
 
     for validator_stake_info in validator_list.validators.into_iter() {
         if validator_stake_info.last_update_epoch == epoch
             && validator_stake_info.status == StakeStatus::Active
-            && validator_stake_info.transient_stake_lamports == 0 {
-                increase_validator_stake(
-                    config, stake_pool_address, &validator_stake_info.vote_account_address, amount
-                )?;
-            }
+            && validator_stake_info.transient_stake_lamports == 0
+        {
+            increase_validator_stake(
+                config,
+                stake_pool_address,
+                &validator_stake_info.vote_account_address,
+                amount,
+            )?;
+        }
     }
 
     todo!();
@@ -2307,13 +2256,11 @@ fn command_distribute_stake(
     Ok(())
 }
 
-fn command_change_validators(
-    config: &Config,
-    stake_pool_address: &Pubkey,
-) -> CommandResult {
+fn command_change_validators(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
     let new_validators_vote_accounts = get_necessary_validators_vote_account_pubkey()?;
-    let old_validators_vote_accounts = get_existing_validators_vote_account_pubkey(config, &stake_pool.validator_list)?;
+    let old_validators_vote_accounts =
+        get_existing_validators_vote_account_pubkey(config, &stake_pool.validator_list)?;
     let mut validators_to_be_added: Vec<&Pubkey> = vec![];
     let mut validators_to_be_removed: Vec<&Pubkey> = vec![];
 
@@ -2353,9 +2300,9 @@ fn command_withdraw_stake_for_subsequent_removing_validator(
 ) -> CommandResult {
     // Simulate result: Response { context: RpcResponseContext { slot: 118734932 }, value: RpcSimulateTransactionResult {
     //  err: Some(InstructionError(0, AccountNotRentExempt)), logs: Some([“Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks invoke [1]“,
-    //      “Program log: Instruction: DecreaseValidatorStake”, “Program log: Need more than 2282880 lamports for transient stake to be rent-exempt, 
-    //      4607 provided”, “Program log: Error: AccountNotRentExempt”, “Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks consumed 16077 of 200000 
-    //      compute units”, “Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks failed: An account does not have enough lamports to be rent-exempt”]), 
+    //      “Program log: Instruction: DecreaseValidatorStake”, “Program log: Need more than 2282880 lamports for transient stake to be rent-exempt,
+    //      4607 provided”, “Program log: Error: AccountNotRentExempt”, “Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks consumed 16077 of 200000
+    //      compute units”, “Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks failed: An account does not have enough lamports to be rent-exempt”]),
     //      accounts: None, units_consumed: None } }
 
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
@@ -2365,7 +2312,12 @@ fn command_withdraw_stake_for_subsequent_removing_validator(
         .find(vote_account)
         .ok_or("Vote account not found in validator list")?;
 
-    decrease_validator_stake(config, stake_pool_address, vote_account, validator_stake_info.active_stake_lamports)
+    decrease_validator_stake(
+        config,
+        stake_pool_address,
+        vote_account,
+        validator_stake_info.active_stake_lamports,
+    )
 }
 
 fn command_check_accounts_for_rent_exempt(
@@ -2374,44 +2326,104 @@ fn command_check_accounts_for_rent_exempt(
 ) -> CommandResult {
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
 
-    if config.rpc_client.get_balance(stake_pool_address)? <
-    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(stake_pool_address)?.len())? {
-        println!("Stake pool account with address {} is not rent-exempt", stake_pool_address.to_string());
+    if config.rpc_client.get_balance(stake_pool_address)?
+        < config.rpc_client.get_minimum_balance_for_rent_exemption(
+            config
+                .rpc_client
+                .get_account_data(stake_pool_address)?
+                .len(),
+        )?
+    {
+        println!(
+            "Stake pool account with address {} is not rent-exempt",
+            stake_pool_address.to_string()
+        );
     } else {
         println!("Stake pool account is rent-exempt");
     }
 
-    if config.rpc_client.get_balance(&stake_pool.reserve_stake)? <
-    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.reserve_stake)?.len())? {
-        println!("Reserve stake account with address {} is not rent-exempt", &stake_pool.reserve_stake.to_string());
+    if config.rpc_client.get_balance(&stake_pool.reserve_stake)?
+        < config.rpc_client.get_minimum_balance_for_rent_exemption(
+            config
+                .rpc_client
+                .get_account_data(&stake_pool.reserve_stake)?
+                .len(),
+        )?
+    {
+        println!(
+            "Reserve stake account with address {} is not rent-exempt",
+            &stake_pool.reserve_stake.to_string()
+        );
     } else {
         println!("Reserve stake account is rent-exempt");
     }
 
-    if config.rpc_client.get_balance(&stake_pool.pool_mint)? <
-    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.pool_mint)?.len())? {
-        println!("Pool mint account account with address {} is not rent-exempt", &stake_pool.pool_mint.to_string());
+    if config.rpc_client.get_balance(&stake_pool.pool_mint)?
+        < config.rpc_client.get_minimum_balance_for_rent_exemption(
+            config
+                .rpc_client
+                .get_account_data(&stake_pool.pool_mint)?
+                .len(),
+        )?
+    {
+        println!(
+            "Pool mint account account with address {} is not rent-exempt",
+            &stake_pool.pool_mint.to_string()
+        );
     } else {
         println!("Pool mint account is rent-exempt");
     }
 
-    if config.rpc_client.get_balance(&stake_pool.treasury_fee_account)? <
-    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.treasury_fee_account)?.len())? {
-        println!("Treasury fee account account with address {} is not rent-exempt", &stake_pool.treasury_fee_account.to_string());
+    if config
+        .rpc_client
+        .get_balance(&stake_pool.treasury_fee_account)?
+        < config.rpc_client.get_minimum_balance_for_rent_exemption(
+            config
+                .rpc_client
+                .get_account_data(&stake_pool.treasury_fee_account)?
+                .len(),
+        )?
+    {
+        println!(
+            "Treasury fee account account with address {} is not rent-exempt",
+            &stake_pool.treasury_fee_account.to_string()
+        );
     } else {
         println!("Treasury fee account is rent-exempt");
     }
 
-    if config.rpc_client.get_balance(&stake_pool.validator_fee_account)? <
-    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.validator_fee_account)?.len())? {
-        println!("Validator`s fee account account with address {} is not rent-exempt", &stake_pool.validator_fee_account.to_string());
+    if config
+        .rpc_client
+        .get_balance(&stake_pool.validator_fee_account)?
+        < config.rpc_client.get_minimum_balance_for_rent_exemption(
+            config
+                .rpc_client
+                .get_account_data(&stake_pool.validator_fee_account)?
+                .len(),
+        )?
+    {
+        println!(
+            "Validator`s fee account account with address {} is not rent-exempt",
+            &stake_pool.validator_fee_account.to_string()
+        );
     } else {
         println!("Validator`s fee account is rent-exempt");
     }
 
-    if config.rpc_client.get_balance(&stake_pool.manager_fee_account)? <
-    config.rpc_client.get_minimum_balance_for_rent_exemption(config.rpc_client.get_account_data(&stake_pool.manager_fee_account)?.len())? {
-        println!("Manager fee account account with address {} is not rent-exempt", &stake_pool.manager_fee_account.to_string());
+    if config
+        .rpc_client
+        .get_balance(&stake_pool.manager_fee_account)?
+        < config.rpc_client.get_minimum_balance_for_rent_exemption(
+            config
+                .rpc_client
+                .get_account_data(&stake_pool.manager_fee_account)?
+                .len(),
+        )?
+    {
+        println!(
+            "Manager fee account account with address {} is not rent-exempt",
+            &stake_pool.manager_fee_account.to_string()
+        );
     } else {
         println!("Manager fee account is rent-exempt");
     }
@@ -2424,7 +2436,7 @@ fn command_check_accounts_for_rent_exempt(
 pub struct PoolValidatorsApiResponse {
     data: Vec<PoolValidatorsData>,
     #[allow(dead_code)]
-    meta_data: PoolValidatorsMetaData
+    meta_data: PoolValidatorsMetaData,
 }
 
 // DTO for https://api.stakesolana.app/v1/pool-validators/{pname}
@@ -2455,40 +2467,79 @@ pub struct PoolValidatorsData {
 pub struct PoolValidatorsMetaData {
     limit: i64,
     offset: i64,
-    total_amount: u64
+    total_amount: u64,
 }
 
 fn command_check_existing_validators() -> CommandResult {
-    let response = reqwest::blocking::get("https://api.stakesolana.app/v1/pool-validators/EverSOL?offset=0&limit=50")?;
+    let response = reqwest::blocking::get(
+        "https://api.stakesolana.app/v1/pool-validators/EverSOL?offset=0&limit=50",
+    )?;
 
-    let pool_validator_api_response = serde_json::from_slice::<'_, PoolValidatorsApiResponse>(&response.bytes()?[..])?;
+    let pool_validator_api_response =
+        serde_json::from_slice::<'_, PoolValidatorsApiResponse>(&response.bytes()?[..])?;
 
     let mut invalid_validators: Vec<(Pubkey, ValidatorComparableParameters)> = vec![];
 
-    for pool_validtor_data in  pool_validator_api_response.data.into_iter() {
+    for pool_validtor_data in pool_validator_api_response.data.into_iter() {
         let validator_comparable_parameters = ValidatorComparableParameters {
             fee: pool_validtor_data.fee,
             skipped_slots: pool_validtor_data.skipped_slots,
             apy: pool_validtor_data.apy,
-            total_active_stake: pool_validtor_data.total_active_stake
+            total_active_stake: pool_validtor_data.total_active_stake,
         };
 
-        if !check_validator(&validator_comparable_parameters)
-        {
-            invalid_validators.push((Pubkey::from_str(pool_validtor_data.vote_pk.as_str())?, validator_comparable_parameters));
+        if !check_validator(&validator_comparable_parameters) {
+            invalid_validators.push((
+                Pubkey::from_str(pool_validtor_data.vote_pk.as_str())?,
+                validator_comparable_parameters,
+            ));
         }
     }
 
     if !invalid_validators.is_empty() {
-        let mut message: String = "".to_string();
+        let mut message: String = "Invalid validators: \n".to_string();
 
-        for (vote_account_pubkey, validator_comparable_parameters) in invalid_validators.into_iter() {
-            message = message + format!("{} : {:?}", vote_account_pubkey.to_string(), validator_comparable_parameters).as_str() + "\n";
+        for (vote_account_pubkey, validator_comparable_parameters) in invalid_validators.into_iter()
+        {
+            message = message
+                + format!(
+                    "{} : {:?}",
+                    vote_account_pubkey.to_string(),
+                    validator_comparable_parameters
+                )
+                .as_str()
+                + "\n";
         }
 
         return Err(message.into());
     }
 
+    Ok(())
+}
+
+fn command_change_structure(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+
+    let mut signers = vec![config.fee_payer.as_ref(), config.manager.as_ref()];
+
+    let instructions = vec![spl_stake_pool::instruction::change_structure(
+        &spl_stake_pool::id(),
+        stake_pool_address,
+        &config.manager.pubkey(),
+    )];
+
+    let mut transaction =
+        Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
+
+    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
+    check_fee_payer_balance(config, fee_calculator.calculate_fee(transaction.message()))?;
+    unique_signers!(signers);
+    transaction.sign(&signers, recent_blockhash);
+    send_transaction(config, transaction)?;
     Ok(())
 }
 
@@ -3357,26 +3408,6 @@ fn main() {
         .subcommand(SubCommand::with_name("list-all")
             .about("List information about all stake pools")
         )
-        .subcommand(SubCommand::with_name("reallocate-stake-pool-account-space")
-            .about("Reallocate space for stake pool account")
-            .arg(
-                Arg::with_name("pool")
-                    .index(1)
-                    .validator(is_pubkey)
-                    .value_name("POOL_ADDRESS")
-                    .takes_value(true)
-                    .required(true)
-                    .help("Stake pool address"),
-            )
-            .arg(
-                Arg::with_name("from")
-                    .long("from")
-                    .validator(is_valid_signer)
-                    .value_name("KEYPAIR")
-                    .takes_value(true)
-                    .help("Source account of funds. [default: cli config keypair]"),
-            )
-        )
         .subcommand(SubCommand::with_name("deposit-liquidity-sol")
             .about("Deposit SOL into the stake pool liquidity")
             .arg(
@@ -3500,6 +3531,18 @@ fn main() {
         )
         .subcommand(SubCommand::with_name("check-existing-validators")
             .about("Check existing in stake pool validator`s list validators")
+        )
+        .subcommand(SubCommand::with_name("change-structure")
+            .about("Change old StakePool for new")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address."),
+            )
         )
         .get_matches();
 
@@ -3886,25 +3929,11 @@ fn main() {
                 &referrer,
             )
         }
-        ("reallocate-stake-pool-account-space", Some(arg_matches)) => {
-            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            let from = keypair_of(arg_matches, "from");
-            command_reallocate_stake_pool_account_space(
-                &config,
-                &stake_pool_address,
-                &from,
-            )
-        }
         ("deposit-liquidity-sol", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             let from = keypair_of(arg_matches, "from");
             let amount = value_t_or_exit!(arg_matches, "amount", f64);
-            command_deposit_liquidity_sol(
-                &config,
-                &stake_pool_address,
-                &from,
-                amount,
-            )
+            command_deposit_liquidity_sol(&config, &stake_pool_address, &from, amount)
         }
         ("withdraw-liquidity-sol", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
@@ -3919,29 +3948,17 @@ fn main() {
                 },
             )
             .pubkey();
-            command_withdraw_liquidity_sol(
-                &config,
-                &stake_pool_address,
-                &sol_receiver,
-                amount,
-            )
+            command_withdraw_liquidity_sol(&config, &stake_pool_address, &sol_receiver, amount)
         }
         ("distribute-stake", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             let only_from_reserve = arg_matches.is_present("only-from-reserve");
 
-            command_distribute_stake(
-                &config,
-                &stake_pool_address,
-                only_from_reserve,
-            )
+            command_distribute_stake(&config, &stake_pool_address, only_from_reserve)
         }
         ("change-validators", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            command_change_validators(
-                &config,
-                &stake_pool_address,
-            )
+            command_change_validators(&config, &stake_pool_address)
         }
         ("withdraw-stake-for-subsequent-removing-validator", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
@@ -3954,13 +3971,12 @@ fn main() {
         }
         ("check-accounts-for-rent-exempt", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            command_check_accounts_for_rent_exempt(
-                &config,
-                &stake_pool_address,
-            )
+            command_check_accounts_for_rent_exempt(&config, &stake_pool_address)
         }
-        ("check-existing-validators", Some(_arg_matches)) => {
-            command_check_existing_validators()
+        ("check-existing-validators", Some(_arg_matches)) => command_check_existing_validators(),
+        ("change-structure", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            command_change_structure(&config, &stake_pool_address)
         }
         _ => unreachable!(),
     }

@@ -7,7 +7,7 @@ use {
         instruction::{FundingType, PreferredValidatorType, StakePoolInstruction},
         minimum_reserve_lamports, minimum_stake_lamports,
         state::{
-            AccountType, Fee, FeeType, RateOfExchange, StakePool, StakeStatus, ValidatorList,
+            AccountType, Fee, FeeType, RateOfExchange, StakePool, StakePoolChanged, StakeStatus, ValidatorList,
             ValidatorListHeader, ValidatorStakeInfo,
         },
         AUTHORITY_DEPOSIT, AUTHORITY_WITHDRAW, MINIMUM_ACTIVE_STAKE, TRANSIENT_STAKE_SEED_PREFIX,
@@ -18,6 +18,7 @@ use {
         account_info::next_account_info,
         account_info::AccountInfo,
         borsh::try_from_slice_unchecked,
+        borsh::get_instance_packed_len,
         clock::{Clock, Epoch},
         decode_error::DecodeError,
         entrypoint::ProgramResult,
@@ -2801,81 +2802,6 @@ impl Processor {
         Ok(())
     }
 
-    /// Processes [ReallocateStakePoolAccountSpace](enum.Instruction.html).
-    #[inline(never)] // needed to avoid stack size violation
-    fn process_reallocate_stake_pool_account_space(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        lamports: u64,
-        new_space: u64,
-    ) -> ProgramResult {    // TODO Проверка, что новы спейс точно больше предыдущег  и на максимальное значение
-        let account_info_iter = &mut accounts.iter();
-        let stake_pool_info = next_account_info(account_info_iter)?;
-        let manager_info = next_account_info(account_info_iter)?;
-        let from_user_lamports_info = next_account_info(account_info_iter)?;
-        let system_program_info = next_account_info(account_info_iter)?;
-
-
-        msg!("QQQQQQQQQQQQQQQQQQQQQ");
-        msg!("{:?}", system_program_info.key);
-        msg!("{:?}", stake_pool_info.owner);
-        msg!("QQQQQQQQQQQQQQQQQQQQQ");
-
-
-        msg!("{:?}", stake_pool_info.data_len());
-        stake_pool_info.realloc(new_space as usize, false)?;
-        msg!("{:?}", stake_pool_info.data_len());
-
-
-
-
-        // check_account_owner(stake_pool_info, program_id)?;
-        // let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
-        // if !stake_pool.is_valid() {
-        //     return Err(StakePoolError::InvalidState.into());
-        // }
-
-        // if stake_pool.last_update_epoch < Clock::get()?.epoch {
-        //     return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
-        // }
-
-        // stake_pool.check_authority_withdraw(
-        //     withdraw_authority_info.key,
-        //     program_id,
-        //     stake_pool_info.key,
-        // )?;
-        // stake_pool.check_sol_deposit_authority(sol_deposit_authority_info)?;
-        // stake_pool.check_reserve_stake(reserve_stake_account_info)?;
-
-        // stake_pool.check_manager(manager_info)?;
-
-        // check_system_program(system_program_info.key)?;
-
-        // if deposit_lamports < MINIMUM_DEPOSIT {
-        //     return Err(StakePoolError::DepositTooSmall.into());
-        // }
-
-        // Self::sol_transfer(
-        //     from_user_lamports_info.clone(),
-        //     stake_pool_info.clone(),
-        //     system_program_info.clone(),
-        //     lamports,
-        // )?;
-
-        // stake_pool.total_lamports = stake_pool
-        //     .total_lamports
-        //     .checked_add(deposit_lamports)
-        //     .ok_or(StakePoolError::CalculationFailure)?;
-        // stake_pool.total_lamports_liquidity = stake_pool
-        //     .total_lamports_liquidity
-        //     .checked_add(deposit_lamports)
-        //     .ok_or(StakePoolError::CalculationFailure)?;
-
-        // stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
-
-        Ok(())
-    }
-
     /// Processes [DepositLiquiditySol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_deposit_liquidity_sol(
@@ -3007,6 +2933,78 @@ impl Processor {
         Ok(())
     }
 
+    /// DELETE
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_change_structure(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        stake_pool.check_manager(manager_info)?;
+
+        let stake_pool_instance_length = get_instance_packed_len(&stake_pool)?;
+
+        let stake_pool_changed = StakePoolChanged {
+            account_type: stake_pool.account_type,
+            manager: stake_pool.manager,
+            staker: stake_pool.staker,
+            stake_deposit_authority: stake_pool.stake_deposit_authority,
+            stake_withdraw_bump_seed: stake_pool.stake_withdraw_bump_seed,
+            validator_list: stake_pool.validator_list,
+            reserve_stake: stake_pool.reserve_stake,
+            pool_mint: stake_pool.pool_mint,
+            manager_fee_account: stake_pool.manager_fee_account,
+            token_program_id: stake_pool.token_program_id,
+            total_lamports: stake_pool.total_lamports,
+            pool_token_supply: stake_pool.pool_token_supply,
+            last_update_epoch: stake_pool.last_update_epoch,
+            lockup: stake_pool.lockup,
+            epoch_fee: stake_pool.epoch_fee,
+            next_epoch_fee: stake_pool.next_epoch_fee,
+            preferred_deposit_validator_vote_address: stake_pool.preferred_deposit_validator_vote_address,
+            preferred_withdraw_validator_vote_address: stake_pool.preferred_withdraw_validator_vote_address,
+            stake_deposit_fee: stake_pool.stake_deposit_fee,
+            stake_withdrawal_fee: stake_pool.stake_withdrawal_fee,
+            next_stake_withdrawal_fee: stake_pool.next_stake_withdrawal_fee,
+            stake_referral_fee: stake_pool.stake_referral_fee,
+            sol_deposit_authority: stake_pool.sol_deposit_authority,
+            sol_deposit_fee: stake_pool.sol_deposit_fee,
+            sol_referral_fee: stake_pool.sol_referral_fee,
+            sol_withdraw_authority: stake_pool.sol_withdraw_authority,
+            sol_withdrawal_fee: stake_pool.sol_withdrawal_fee,
+            next_sol_withdrawal_fee: stake_pool.next_sol_withdrawal_fee,
+            last_epoch_pool_token_supply: stake_pool.last_epoch_pool_token_supply,
+            last_epoch_total_lamports: stake_pool.last_epoch_total_lamports,
+            rate_of_exchange: stake_pool.rate_of_exchange,
+            treasury_fee_account: stake_pool.treasury_fee_account,
+            treasury_fee: stake_pool.treasury_fee,
+            total_lamports_liquidity: 0
+        };
+
+        if stake_pool_instance_length < get_instance_packed_len(&stake_pool_changed)? {
+            msg!("New structure size is bigger");
+
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        stake_pool_changed.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
     /// Processes [Instruction](enum.Instruction.html).
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = StakePoolInstruction::try_from_slice(input)?;
@@ -3129,13 +3127,6 @@ impl Processor {
                 msg!("Instruction: WithdrawSol");
                 Self::process_withdraw_sol(program_id, accounts, pool_tokens)
             }
-            StakePoolInstruction::ReallocateStakePoolAccountSpace {
-                lamports,
-                space,
-            } => {
-                msg!("Instruction: ReallocateStakePoolAccountSpace");
-                Self::process_reallocate_stake_pool_account_space(program_id, accounts, lamports, space)
-            }
             StakePoolInstruction::DepositLiquiditySol(lamports) => {
                 msg!("Instruction: DepositLiquiditySol");
                 Self::process_deposit_liquidity_sol(program_id, accounts, lamports)
@@ -3143,6 +3134,10 @@ impl Processor {
             StakePoolInstruction::WithdrawLiquiditySol(lamports) => {
                 msg!("Instruction: WithdrawLiquiditySol");
                 Self::process_withdraw_liquidity_sol(program_id, accounts, lamports)
+            }
+            StakePoolInstruction::ChangeStructure => {
+                msg!("Instruction: ChnageStructure");
+                Self::process_change_structure(program_id, accounts)
             }
         }
     }
