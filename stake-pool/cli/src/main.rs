@@ -52,6 +52,7 @@ use {
     std::str::FromStr,
     std::{process::exit, sync::Arc},
 };
+
 // use instruction::create_associated_token_account once ATA 1.0.5 is released
 #[allow(deprecated)]
 use spl_associated_token_account::create_associated_token_account;
@@ -221,15 +222,38 @@ fn new_stake_account(
     stake_receiver_keypair
 }
 
-#[derive(serde::Deserialize, Debug)]
-pub struct GetValidatorsApiResponse {
-    data: Vec<GetValidatorsData>,
-    #[allow(dead_code)]
-    meta_data: GetValidatorsMetaData
+const VALIDATOR_MAXIMUM_FEE: f64 = 0.07;
+const VALIDATOR_MAXIMUM_SKIPPED_SLOTS: f64 = 0.1;
+const VALIDATOR_MINIMUM_APY: f64 = 0.06;
+const VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE: f64 = 1000.0;
+const VALIDATORS_QUANTITY: usize = 25;
+
+#[derive(Debug)]
+pub struct ValidatorComparableParameters {
+    fee: f64,
+    skipped_slots: f64,
+    apy: f64,
+    total_active_stake: f64,
 }
 
+fn check_validator(validator_comparable_parameters: &ValidatorComparableParameters) -> bool {
+    return validator_comparable_parameters.fee <= VALIDATOR_MAXIMUM_FEE
+            && validator_comparable_parameters.skipped_slots <= VALIDATOR_MAXIMUM_SKIPPED_SLOTS
+            && validator_comparable_parameters.apy >= VALIDATOR_MINIMUM_APY
+            && validator_comparable_parameters.total_active_stake >= VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE
+}
+
+// DTO for https://api.stakesolana.app/v1/validators
 #[derive(serde::Deserialize, Debug)]
-pub struct GetValidatorsData {
+pub struct ValidatorsApiResponse {
+    data: Vec<ValidatorsData>,
+    #[allow(dead_code)]
+    meta_data: ValidatorsMetaData
+}
+
+// DTO for https://api.stakesolana.app/v1/validators
+#[derive(serde::Deserialize, Debug)]
+pub struct ValidatorsData {
     #[allow(dead_code)]
     name: String,
     #[allow(dead_code)]
@@ -247,28 +271,23 @@ pub struct GetValidatorsData {
     data_center: String,
 }
 
+// DTO for https://api.stakesolana.app/v1/validators
 #[allow(dead_code)]
 #[derive(serde::Deserialize, Debug)]
-pub struct GetValidatorsMetaData {
+pub struct ValidatorsMetaData {
     limit: i64,
     offset: i64,
     total_amount: u64
 }
 
-const VALIDATOR_MAXIMUM_FEE: f64 = 0.07;
-const VALIDATOR_MAXIMUM_SKIPPED_SLOTS: f64 = 0.1;
-const VALIDATOR_MINIMUM_APY: f64 = 0.06;
-const VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE: f64 = 1000.0;
-const VALIDATORS_QUANTITY: usize = 25;
-
-fn find_validators_by_rules() -> Result<Vec<Pubkey>, Error> {
+fn get_necessary_validators_vote_account_pubkey() -> Result<Vec<Pubkey>, Error> {
     let response = reqwest::blocking::get("https://api.stakesolana.app/v1/validators?sort=stake&desc=true&offset=25&limit=700")?;
 
-    let mut get_validator_api_response = serde_json::from_slice::<'_, GetValidatorsApiResponse>(&response.bytes()?[..])?;
+    let mut validator_api_response = serde_json::from_slice::<'_, ValidatorsApiResponse>(&response.bytes()?[..])?;
 
     let mut result: Vec<Pubkey> = vec![];
 
-    get_validator_api_response.data.sort_by(|a: &'_ GetValidatorsData, b: &'_ GetValidatorsData| -> Ordering {
+    validator_api_response.data.sort_by(|a: &'_ ValidatorsData, b: &'_ ValidatorsData| -> Ordering {
         if a.apy > b.apy {
             return Ordering::Less;
         } else {
@@ -280,24 +299,28 @@ fn find_validators_by_rules() -> Result<Vec<Pubkey>, Error> {
         }
     });
 
-    for get_validtor_data in  get_validator_api_response.data.into_iter() {
+    for validtor_data in  validator_api_response.data.into_iter() {
         if result.len() == VALIDATORS_QUANTITY {
             return Ok(result);
         }
 
-        if get_validtor_data.fee < VALIDATOR_MAXIMUM_FEE
-            && get_validtor_data.skipped_slots < VALIDATOR_MAXIMUM_SKIPPED_SLOTS
-            && get_validtor_data.apy > VALIDATOR_MINIMUM_APY
-            && get_validtor_data.total_active_stake > VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE
+        let validator_comparable_parameters = ValidatorComparableParameters {
+            fee: validtor_data.fee,
+            skipped_slots: validtor_data.skipped_slots,
+            apy: validtor_data.apy,
+            total_active_stake: validtor_data.total_active_stake
+        };
+
+        if check_validator(&validator_comparable_parameters)
         {
-            result.push(Pubkey::from_str(get_validtor_data.vote_pk.as_str())?);
+            result.push(Pubkey::from_str(validtor_data.vote_pk.as_str())?);
         }
     }
 
     return Ok(result);
 }
 
-fn get_existing_validators(
+fn get_existing_validators_vote_account_pubkey(
     config: &Config,
     validator_list_address: &Pubkey,
 ) -> Result<Vec<Pubkey>, Error> {
@@ -2279,6 +2302,8 @@ fn command_distribute_stake(
             }
     }
 
+    todo!();
+
     Ok(())
 }
 
@@ -2287,8 +2312,8 @@ fn command_change_validators(
     stake_pool_address: &Pubkey,
 ) -> CommandResult {
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-    let new_validators_vote_accounts = find_validators_by_rules()?;
-    let old_validators_vote_accounts = get_existing_validators(config, &stake_pool.validator_list)?;
+    let new_validators_vote_accounts = get_necessary_validators_vote_account_pubkey()?;
+    let old_validators_vote_accounts = get_existing_validators_vote_account_pubkey(config, &stake_pool.validator_list)?;
     let mut validators_to_be_added: Vec<&Pubkey> = vec![];
     let mut validators_to_be_removed: Vec<&Pubkey> = vec![];
 
@@ -2389,6 +2414,79 @@ fn command_check_accounts_for_rent_exempt(
         println!("Manager fee account account with address {} is not rent-exempt", &stake_pool.manager_fee_account.to_string());
     } else {
         println!("Manager fee account is rent-exempt");
+    }
+
+    Ok(())
+}
+
+// DTO for https://api.stakesolana.app/v1/pool-validators/{pname}
+#[derive(serde::Deserialize, Debug)]
+pub struct PoolValidatorsApiResponse {
+    data: Vec<PoolValidatorsData>,
+    #[allow(dead_code)]
+    meta_data: PoolValidatorsMetaData
+}
+
+// DTO for https://api.stakesolana.app/v1/pool-validators/{pname}
+#[derive(serde::Deserialize, Debug)]
+pub struct PoolValidatorsData {
+    #[allow(dead_code)]
+    name: String,
+    #[allow(dead_code)]
+    image: String,
+    #[allow(dead_code)]
+    node_pk: String,
+    apy: f64,
+    vote_pk: String,
+    total_active_stake: f64,
+    #[allow(dead_code)]
+    pool_active_stake: f64,
+    fee: f64,
+    #[allow(dead_code)]
+    score: i64,
+    skipped_slots: f64,
+    #[allow(dead_code)]
+    data_center: String,
+}
+
+// DTO for https://api.stakesolana.app/v1/pool-validators/{pname}
+#[allow(dead_code)]
+#[derive(serde::Deserialize, Debug)]
+pub struct PoolValidatorsMetaData {
+    limit: i64,
+    offset: i64,
+    total_amount: u64
+}
+
+fn command_check_existing_validators() -> CommandResult {
+    let response = reqwest::blocking::get("https://api.stakesolana.app/v1/pool-validators/EverSOL?offset=0&limit=50")?;
+
+    let pool_validator_api_response = serde_json::from_slice::<'_, PoolValidatorsApiResponse>(&response.bytes()?[..])?;
+
+    let mut invalid_validators: Vec<(Pubkey, ValidatorComparableParameters)> = vec![];
+
+    for pool_validtor_data in  pool_validator_api_response.data.into_iter() {
+        let validator_comparable_parameters = ValidatorComparableParameters {
+            fee: pool_validtor_data.fee,
+            skipped_slots: pool_validtor_data.skipped_slots,
+            apy: pool_validtor_data.apy,
+            total_active_stake: pool_validtor_data.total_active_stake
+        };
+
+        if !check_validator(&validator_comparable_parameters)
+        {
+            invalid_validators.push((Pubkey::from_str(pool_validtor_data.vote_pk.as_str())?, validator_comparable_parameters));
+        }
+    }
+
+    if !invalid_validators.is_empty() {
+        let mut message: String = "".to_string();
+
+        for (vote_account_pubkey, validator_comparable_parameters) in invalid_validators.into_iter() {
+            message = message + format!("{} : {:?}", vote_account_pubkey.to_string(), validator_comparable_parameters).as_str() + "\n";
+        }
+
+        return Err(message.into());
     }
 
     Ok(())
@@ -3400,6 +3498,9 @@ fn main() {
                     .help("Stake pool address."),
             )
         )
+        .subcommand(SubCommand::with_name("check-existing-validators")
+            .about("Check existing in stake pool validator`s list validators")
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -3857,6 +3958,9 @@ fn main() {
                 &config,
                 &stake_pool_address,
             )
+        }
+        ("check-existing-validators", Some(_arg_matches)) => {
+            command_check_existing_validators()
         }
         _ => unreachable!(),
     }
