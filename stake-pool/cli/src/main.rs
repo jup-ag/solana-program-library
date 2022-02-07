@@ -56,7 +56,6 @@ use {
 // use instruction::create_associated_token_account once ATA 1.0.5 is released
 #[allow(deprecated)]
 use spl_associated_token_account::create_associated_token_account;
-use spl_stake_pool::state::StakePoolChanged;
 
 pub(crate) struct Config {
     rpc_client: RpcClient,
@@ -349,7 +348,6 @@ fn command_create_pool(
     withdrawal_fee: Fee,
     deposit_fee: Fee,
     treasury_fee: Fee,
-    validator_fee: Fee,
     referral_fee: u8,
     max_validators: u32,
     stake_pool_keypair: Option<Keypair>,
@@ -357,7 +355,6 @@ fn command_create_pool(
     mint_keypair: Option<Keypair>,
     reserve_keypair: Option<Keypair>,
     treasury_keypair: Option<Keypair>,
-    validator_fee_keypair: Option<Keypair>,
     unsafe_fees: bool,
 ) -> CommandResult {
     if !unsafe_fees {
@@ -371,12 +368,6 @@ fn command_create_pool(
 
     let treasury_keypair = treasury_keypair.unwrap_or_else(Keypair::new);
     println!("Creating treasury {}", treasury_keypair.pubkey());
-
-    let validator_fee_keypair = validator_fee_keypair.unwrap_or_else(Keypair::new);
-    println!(
-        "Creating validator`s fee {}",
-        validator_fee_keypair.pubkey()
-    );
 
     let stake_pool_keypair = stake_pool_keypair.unwrap_or_else(Keypair::new);
 
@@ -395,9 +386,6 @@ fn command_create_pool(
     let treasury_fee_account_balance = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?;
-    let validatiors_fee_account_balance = config
-        .rpc_client
-        .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?;
     let stake_pool_account_lamports = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(get_packed_len::<StakePool>())?;
@@ -410,7 +398,6 @@ fn command_create_pool(
         + mint_account_balance
         + pool_fee_account_balance
         + treasury_fee_account_balance
-        + validatiors_fee_account_balance
         + stake_pool_account_lamports
         + validator_list_balance;
 
@@ -478,21 +465,6 @@ fn command_create_pool(
             &mint_keypair.pubkey(),
             &config.manager.pubkey(),
         )?,
-        // Create validator fee account
-        system_instruction::create_account(
-            &config.fee_payer.pubkey(),
-            &validator_fee_keypair.pubkey(),
-            token_account_rent_exempt,
-            spl_token::state::Account::LEN as u64,
-            &spl_token::id(),
-        ),
-        // Initialize validator fee account as token account
-        spl_token::instruction::initialize_account(
-            &spl_token::id(),
-            &validator_fee_keypair.pubkey(),
-            &mint_keypair.pubkey(),
-            &config.manager.pubkey(),
-        )?,
     ];
 
     let pool_fee_account = add_associated_token_account(
@@ -540,7 +512,6 @@ fn command_create_pool(
                 &mint_keypair.pubkey(),
                 &pool_fee_account,
                 &treasury_keypair.pubkey(),
-                &validator_fee_keypair.pubkey(),
                 &spl_token::id(),
                 deposit_authority.as_ref().map(|x| x.pubkey()),
                 epoch_fee,
@@ -548,7 +519,6 @@ fn command_create_pool(
                 deposit_fee,
                 referral_fee,
                 treasury_fee,
-                validator_fee,
                 max_validators,
             ),
         ],
@@ -566,7 +536,6 @@ fn command_create_pool(
         &mint_keypair,
         &reserve_keypair,
         &treasury_keypair,
-        &validator_fee_keypair,
     ];
     unique_signers!(setup_signers);
     let setup_transaction = Transaction::new(&setup_signers, setup_message, recent_blockhash);
@@ -2394,24 +2363,6 @@ fn command_check_accounts_for_rent_exempt(
 
     if config
         .rpc_client
-        .get_balance(&stake_pool.validator_fee_account)?
-        < config.rpc_client.get_minimum_balance_for_rent_exemption(
-            config
-                .rpc_client
-                .get_account_data(&stake_pool.validator_fee_account)?
-                .len(),
-        )?
-    {
-        println!(
-            "Validator`s fee account account with address {} is not rent-exempt",
-            &stake_pool.validator_fee_account.to_string()
-        );
-    } else {
-        println!("Validator`s fee account is rent-exempt");
-    }
-
-    if config
-        .rpc_client
         .get_balance(&stake_pool.manager_fee_account)?
         < config.rpc_client.get_minimum_balance_for_rent_exemption(
             config
@@ -2514,32 +2465,6 @@ fn command_check_existing_validators() -> CommandResult {
         return Err(message.into());
     }
 
-    Ok(())
-}
-
-fn command_change_structure(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
-    if !config.no_update {
-        command_update(config, stake_pool_address, false, false)?;
-    }
-
-    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-
-    let mut signers = vec![config.fee_payer.as_ref(), config.manager.as_ref()];
-
-    let instructions = vec![spl_stake_pool::instruction::change_structure(
-        &spl_stake_pool::id(),
-        stake_pool_address,
-        &config.manager.pubkey(),
-    )];
-
-    let mut transaction =
-        Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
-
-    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
-    check_fee_payer_balance(config, fee_calculator.calculate_fee(transaction.message()))?;
-    unique_signers!(signers);
-    transaction.sign(&signers, recent_blockhash);
-    send_transaction(config, transaction)?;
     Ok(())
 }
 
@@ -2717,23 +2642,6 @@ fn main() {
                     .help("Fee denominator assessed on taking rewards for treasury, fee amount is numerator divided by denominator [default: 0]"),
             )
             .arg(
-                Arg::with_name("validator_fee_numerator")
-                    .long("validator-fee-numerator")
-                    .validator(is_parsable::<u64>)
-                    .value_name("NUMERATOR")
-                    .takes_value(true)
-                    .requires("validator_fee_denominator")
-                    .help("Fee numerator assessed on taking rewards for validators, fee amount is numerator divided by denominator [default: 0]"),
-            ).arg(
-                Arg::with_name("validator_fee_denominator")
-                    .long("validator-fee-denominator")
-                    .validator(is_parsable::<u64>)
-                    .value_name("DENOMINATOR")
-                    .takes_value(true)
-                    .requires("validator_fee_numerator")
-                    .help("Fee denominator assessed on taking rewards for validators, fee amount is numerator divided by denominator [default: 0]"),
-            )
-            .arg(
                 Arg::with_name("referral_fee")
                     .long("referral-fee")
                     .validator(is_valid_percentage)
@@ -2800,14 +2708,6 @@ fn main() {
                     .value_name("PATH")
                     .takes_value(true)
                     .help("Treasury keypair [default: new keypair]"),
-            )
-            .arg(
-                Arg::with_name("validator_fee_keypair")
-                    .long("validator-fee-keypair")
-                    .validator(is_keypair_or_ask_keyword)
-                    .value_name("PATH")
-                    .takes_value(true)
-                    .help("Validator fee keypair [default: new keypair]"),
             )
             .arg(
                 Arg::with_name("unsafe_fees")
@@ -3532,18 +3432,6 @@ fn main() {
         .subcommand(SubCommand::with_name("check-existing-validators")
             .about("Check existing in stake pool validator`s list validators")
         )
-        .subcommand(SubCommand::with_name("change-structure")
-            .about("Change old StakePool for new")
-            .arg(
-                Arg::with_name("pool")
-                    .index(1)
-                    .validator(is_pubkey)
-                    .value_name("POOL_ADDRESS")
-                    .takes_value(true)
-                    .required(true)
-                    .help("Stake pool address."),
-            )
-        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -3645,8 +3533,6 @@ fn main() {
             let w_denominator = value_t!(arg_matches, "withdrawal_fee_denominator", u64);
             let t_numerator = value_t!(arg_matches, "treasury_fee_numerator", u64);
             let t_denominator = value_t!(arg_matches, "treasury_fee_denominator", u64);
-            let v_numerator = value_t!(arg_matches, "validator_fee_numerator", u64);
-            let v_denominator = value_t!(arg_matches, "validator_fee_denominator", u64);
             let d_numerator = value_t!(arg_matches, "deposit_fee_numerator", u64);
             let d_denominator = value_t!(arg_matches, "deposit_fee_denominator", u64);
             let referral_fee = value_t!(arg_matches, "referral_fee", u8);
@@ -3656,7 +3542,6 @@ fn main() {
             let mint_keypair = keypair_of(arg_matches, "mint_keypair");
             let reserve_keypair = keypair_of(arg_matches, "reserve_keypair");
             let treasury_keypair = keypair_of(arg_matches, "treasury_keypair");
-            let validator_fee_keypair = keypair_of(arg_matches, "validator_fee_keypair");
             let unsafe_fees = arg_matches.is_present("unsafe_fees");
             command_create_pool(
                 &config,
@@ -3677,10 +3562,6 @@ fn main() {
                     numerator: t_numerator.unwrap_or(0),
                     denominator: t_denominator.unwrap_or(0),
                 },
-                Fee {
-                    numerator: v_numerator.unwrap_or(0),
-                    denominator: v_denominator.unwrap_or(0),
-                },
                 referral_fee.unwrap_or(0),
                 max_validators,
                 pool_keypair,
@@ -3688,7 +3569,6 @@ fn main() {
                 mint_keypair,
                 reserve_keypair,
                 treasury_keypair,
-                validator_fee_keypair,
                 unsafe_fees,
             )
         }
@@ -3884,9 +3764,6 @@ fn main() {
                 "treasury" => {
                     command_set_fee(&config, &stake_pool_address, FeeType::Treasury(new_fee))
                 }
-                "validator" => {
-                    command_set_fee(&config, &stake_pool_address, FeeType::Validator(new_fee))
-                }
                 _ => unreachable!(),
             }
         }
@@ -3974,10 +3851,6 @@ fn main() {
             command_check_accounts_for_rent_exempt(&config, &stake_pool_address)
         }
         ("check-existing-validators", Some(_arg_matches)) => command_check_existing_validators(),
-        ("change-structure", Some(arg_matches)) => {
-            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            command_change_structure(&config, &stake_pool_address)
-        }
         _ => unreachable!(),
     }
     .map_err(|err| {

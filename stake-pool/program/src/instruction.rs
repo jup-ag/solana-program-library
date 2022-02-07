@@ -74,9 +74,6 @@ pub enum StakePoolInstruction {
         /// Fee assessed on taking rewards for treasury
         #[allow(dead_code)] // but it's not
         treasury_fee: Fee,
-        /// Fee assessed on taking rewards for validators
-        #[allow(dead_code)] // but it's not
-        validator_fee: Fee,
         /// Percentage [0-100] of deposit_fee that goes to referrer
         #[allow(dead_code)] // but it's not
         referral_fee: u8,
@@ -407,15 +404,6 @@ pub enum StakePoolInstruction {
     ///   7. `[]` Stake program account
     ///   8. `[s]` (Optional) Stake pool sol withdraw authority
     WithdrawLiquiditySol(u64),
-
-
-
-
-        ///   DELETE AFTER EXECUTION
-    ///
-    ///   0. `[w]` Stake pool
-    ///   1. `[s]` Manager
-    ChangeStructure,
 }
 
 /// Creates an 'initialize' instruction.
@@ -430,7 +418,6 @@ pub fn initialize(
     pool_mint: &Pubkey,
     manager_pool_account: &Pubkey,
     treasury_fee_account: &Pubkey,
-    validator_fee_account: &Pubkey,
     token_program_id: &Pubkey,
     deposit_authority: Option<Pubkey>,
     fee: Fee,
@@ -438,7 +425,6 @@ pub fn initialize(
     deposit_fee: Fee,
     referral_fee: u8,
     treasury_fee: Fee,
-    validator_fee: Fee,
     max_validators: u32,
 ) -> Instruction {
     let init_data = StakePoolInstruction::Initialize {
@@ -446,7 +432,6 @@ pub fn initialize(
         withdrawal_fee,
         deposit_fee,
         treasury_fee,
-        validator_fee,
         referral_fee,
         max_validators,
     };
@@ -461,7 +446,6 @@ pub fn initialize(
         AccountMeta::new(*pool_mint, false),
         AccountMeta::new(*manager_pool_account, false),
         AccountMeta::new_readonly(*treasury_fee_account, false),
-        AccountMeta::new_readonly(*validator_fee_account, false),
         AccountMeta::new_readonly(*token_program_id, false),
     ];
     if let Some(deposit_authority) = deposit_authority {
@@ -837,7 +821,6 @@ pub fn update_stake_pool_balance(
     manager_fee_account: &Pubkey,
     stake_pool_mint: &Pubkey,
     treasury_fee_account: &Pubkey,
-    validator_fee_account: &Pubkey,
     token_program_id: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
@@ -848,7 +831,6 @@ pub fn update_stake_pool_balance(
         AccountMeta::new(*manager_fee_account, false),
         AccountMeta::new(*stake_pool_mint, false),
         AccountMeta::new(*treasury_fee_account, false),
-        AccountMeta::new(*validator_fee_account, false),
         AccountMeta::new_readonly(*token_program_id, false),
     ];
     Instruction {
@@ -924,7 +906,6 @@ pub fn update_stake_pool(
             &stake_pool.manager_fee_account,
             &stake_pool.pool_mint,
             &stake_pool.treasury_fee_account,
-            &stake_pool.validator_fee_account,
             &stake_pool.token_program_id,
         ),
         cleanup_removed_validator_entries(
@@ -1443,25 +1424,6 @@ pub fn withdraw_liquidity_sol_with_authority(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::WithdrawLiquiditySol(amount)
-            .try_to_vec()
-            .unwrap(),
-    }
-}
-
-/// DELETE
-pub fn change_structure(
-    program_id: &Pubkey,
-    stake_pool: &Pubkey,
-    manager: &Pubkey,
-) -> Instruction {
-    let accounts = vec![
-        AccountMeta::new(*stake_pool, false),
-        AccountMeta::new_readonly(*manager, true),
-    ];
-    Instruction {
-        program_id: *program_id,
-        accounts,
-        data: StakePoolInstruction::ChangeStructure
             .try_to_vec()
             .unwrap(),
     }

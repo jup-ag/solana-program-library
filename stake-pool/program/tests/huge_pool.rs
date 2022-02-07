@@ -91,8 +91,6 @@ async fn setup(
         rate_of_exchange: None,
         treasury_fee_account: stake_pool_accounts.treasury_fee_account.pubkey(),
         treasury_fee: Fee::default(),
-        validator_fee_account: stake_pool_accounts.validator_fee_account.pubkey(),
-        validator_fee: Fee::default(),
         total_lamports_liquidity: 0
     };
 
@@ -364,7 +362,6 @@ async fn update() {
             &stake_pool_accounts.pool_fee_account.pubkey(),
             &stake_pool_accounts.pool_mint.pubkey(),
             &stake_pool_accounts.treasury_fee_account.pubkey(),
-            &stake_pool_accounts.validator_fee_account.pubkey(),
             &spl_token::id(),
         )],
         Some(&context.payer.pubkey()),

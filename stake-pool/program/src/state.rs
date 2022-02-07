@@ -42,133 +42,6 @@ impl Default for AccountType {
 /// Initialized program details.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
-pub struct StakePoolChanged {
-    /// Account type, must be StakePool currently
-    pub account_type: AccountType,
-
-    /// Manager authority, allows for updating the staker, manager, and fee account
-    pub manager: Pubkey,
-
-    /// Staker authority, allows for adding and removing validators, and managing stake
-    /// distribution
-    pub staker: Pubkey,
-
-    /// Stake deposit authority
-    ///
-    /// If a depositor pubkey is specified on initialization, then deposits must be
-    /// signed by this authority. If no deposit authority is specified,
-    /// then the stake pool will default to the result of:
-    /// `Pubkey::find_program_address(
-    ///     &[&stake_pool_address.to_bytes()[..32], b"deposit"],
-    ///     program_id,
-    /// )`
-    pub stake_deposit_authority: Pubkey,
-
-    /// Stake withdrawal authority bump seed
-    /// for `create_program_address(&[state::StakePool account, "withdrawal"])`
-    pub stake_withdraw_bump_seed: u8,
-
-    /// Validator stake list storage account
-    pub validator_list: Pubkey,
-
-    /// Reserve stake account, holds deactivated stake
-    pub reserve_stake: Pubkey,
-
-    /// Pool Mint
-    pub pool_mint: Pubkey,
-
-    /// Manager fee account
-    pub manager_fee_account: Pubkey,
-
-    /// Pool token program id
-    pub token_program_id: Pubkey,
-
-    /// Total stake under management.
-    /// Note that if `last_update_epoch` does not match the current epoch then
-    /// this field may not be accurate
-    pub total_lamports: u64,
-
-    /// Total supply of pool tokens (should always match the supply in the Pool Mint)
-    pub pool_token_supply: u64,
-
-    /// Last epoch the `total_lamports` field was updated
-    pub last_update_epoch: u64,
-
-    /// Lockup that all stakes in the pool must have
-    pub lockup: Lockup,
-
-    /// Fee taken as a proportion of rewards each epoch
-    pub epoch_fee: Fee,
-
-    /// Fee for next epoch
-    pub next_epoch_fee: Option<Fee>,
-
-    /// Preferred deposit validator vote account pubkey
-    pub preferred_deposit_validator_vote_address: Option<Pubkey>,
-
-    /// Preferred withdraw validator vote account pubkey
-    pub preferred_withdraw_validator_vote_address: Option<Pubkey>,
-
-    /// Fee assessed on stake deposits
-    pub stake_deposit_fee: Fee,
-
-    /// Fee assessed on withdrawals
-    pub stake_withdrawal_fee: Fee,
-
-    /// Future stake withdrawal fee, to be set for the following epoch
-    pub next_stake_withdrawal_fee: Option<Fee>,
-
-    /// Fees paid out to referrers on referred stake deposits.
-    /// Expressed as a percentage (0 - 100) of deposit fees.
-    /// i.e. `stake_deposit_fee`% of stake deposited is collected as deposit fees for every deposit
-    /// and `stake_referral_fee`% of the collected stake deposit fees is paid out to the referrer
-    pub stake_referral_fee: u8,
-
-    /// Toggles whether the `DepositSol` instruction requires a signature from
-    /// this `sol_deposit_authority`
-    pub sol_deposit_authority: Option<Pubkey>,
-
-    /// Fee assessed on SOL deposits
-    pub sol_deposit_fee: Fee,
-
-    /// Fees paid out to referrers on referred SOL deposits.
-    /// Expressed as a percentage (0 - 100) of SOL deposit fees.
-    /// i.e. `sol_deposit_fee`% of SOL deposited is collected as deposit fees for every deposit
-    /// and `sol_referral_fee`% of the collected SOL deposit fees is paid out to the referrer
-    pub sol_referral_fee: u8,
-
-    /// Toggles whether the `WithdrawSol` instruction requires a signature from
-    /// the `deposit_authority`
-    pub sol_withdraw_authority: Option<Pubkey>,
-
-    /// Fee assessed on SOL withdrawals
-    pub sol_withdrawal_fee: Fee,
-
-    /// Future SOL withdrawal fee, to be set for the following epoch
-    pub next_sol_withdrawal_fee: Option<Fee>,
-
-    /// Last epoch's total pool tokens, used only for APR estimation
-    pub last_epoch_pool_token_supply: u64,
-
-    /// Last epoch's total lamports, used only for APR estimation
-    pub last_epoch_total_lamports: u64,
-
-    /// Last epoch's exchange rate for SOL deposit and withdraw
-    pub rate_of_exchange: Option<RateOfExchange>,
-
-    /// Treasury fee account
-    pub treasury_fee_account: Pubkey,
-
-    /// Fee assessed on taking rewards for treasury
-    pub treasury_fee: Fee,
-
-    /// Total liquidity in Sol equivalent under management.
-    pub total_lamports_liquidity: u64,
-}
-
-/// Initialized program details.
-#[repr(C)]
-#[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct StakePool {
     /// Account type, must be StakePool currently
     pub account_type: AccountType,
@@ -289,12 +162,6 @@ pub struct StakePool {
     /// Fee assessed on taking rewards for treasury
     pub treasury_fee: Fee,
 
-    /// Validator`s fee account
-    pub validator_fee_account: Pubkey,
-
-    /// Fee assessed on taking rewards for validators
-    pub validator_fee: Fee,
-
     /// Total liquidity in Sol equivalent under management.
     pub total_lamports_liquidity: u64,
 }
@@ -391,14 +258,6 @@ impl StakePool {
     #[inline]
     pub fn calc_pool_tokens_treasury_fee(&self, reward_lamports: u64) -> Option<u64> {
         let fee_lamports = self.treasury_fee.apply(reward_lamports)?;
-
-        self.convert_amount_of_lamports_to_amount_of_pool_tokens(u64::try_from(fee_lamports).ok()?)
-    }
-
-    /// Calculate the fee in pool tokens that goes to the validators
-    #[inline]
-    pub fn calc_pool_tokens_validator_fee(&self, reward_lamports: u64) -> Option<u64> {
-        let fee_lamports = self.validator_fee.apply(reward_lamports)?;
 
         self.convert_amount_of_lamports_to_amount_of_pool_tokens(u64::try_from(fee_lamports).ok()?)
     }
@@ -624,7 +483,6 @@ impl StakePool {
             FeeType::SolDeposit(new_fee) => self.sol_deposit_fee = *new_fee,
             FeeType::StakeDeposit(new_fee) => self.stake_deposit_fee = *new_fee,
             FeeType::Treasury(new_fee) => self.treasury_fee = *new_fee,
-            FeeType::Validator(new_fee) => self.validator_fee = *new_fee,
         };
         Ok(())
     }
@@ -940,8 +798,6 @@ pub enum FeeType {
     SolWithdrawal(Fee),
     /// Fee for treasury from reward
     Treasury(Fee),
-    /// Fee for validators from reward
-    Validator(Fee),
 }
 
 impl FeeType {
@@ -956,7 +812,6 @@ impl FeeType {
             Self::SolDeposit(fee) => fee.numerator > fee.denominator,
             Self::StakeDeposit(fee) => fee.numerator > fee.denominator,
             Self::Treasury(fee) => fee.numerator > fee.denominator,
-            Self::Validator(fee) => fee.numerator > fee.denominator,
         };
         if too_high {
             msg!("Fee greater than 100%: {:?}", self);

@@ -7,7 +7,7 @@ use {
         instruction::{FundingType, PreferredValidatorType, StakePoolInstruction},
         minimum_reserve_lamports, minimum_stake_lamports,
         state::{
-            AccountType, Fee, FeeType, RateOfExchange, StakePool, StakePoolChanged, StakeStatus, ValidatorList,
+            AccountType, Fee, FeeType, RateOfExchange, StakePool, StakeStatus, ValidatorList,
             ValidatorListHeader, ValidatorStakeInfo,
         },
         AUTHORITY_DEPOSIT, AUTHORITY_WITHDRAW, MINIMUM_ACTIVE_STAKE, TRANSIENT_STAKE_SEED_PREFIX,
@@ -502,7 +502,6 @@ impl Processor {
         withdrawal_fee: Fee,
         deposit_fee: Fee,
         treasury_fee: Fee,
-        validator_fee: Fee,
         referral_fee: u8,
         max_validators: u32,
     ) -> ProgramResult {
@@ -516,7 +515,6 @@ impl Processor {
         let pool_mint_info = next_account_info(account_info_iter)?;
         let manager_fee_info = next_account_info(account_info_iter)?;
         let treasury_fee_info = next_account_info(account_info_iter)?;
-        let validator_fee_info = next_account_info(account_info_iter)?;
         let token_program_info = next_account_info(account_info_iter)?;
 
         let rent = Rent::get()?;
@@ -578,17 +576,11 @@ impl Processor {
             return Err(ProgramError::AccountNotRentExempt);
         }
 
-        if !rent.is_exempt(validator_fee_info.lamports(), validator_fee_info.data_len()) {
-            msg!("Validator`fee account not rent-exempt");
-            return Err(ProgramError::AccountNotRentExempt);
-        }
-
         // Numerator should be smaller than or equal to denominator (fee <= 1)
         if epoch_fee.numerator > epoch_fee.denominator
             || withdrawal_fee.numerator > withdrawal_fee.denominator
             || deposit_fee.numerator > deposit_fee.denominator
             || treasury_fee.numerator > treasury_fee.denominator
-            || validator_fee.numerator > validator_fee.denominator
             || referral_fee > 100u8
         {
             return Err(StakePoolError::FeeTooHigh.into());
@@ -615,17 +607,10 @@ impl Processor {
             return Err(ProgramError::IncorrectProgramId);
         }
 
-        if validator_fee_info.owner != token_program_info.key {
-            return Err(ProgramError::IncorrectProgramId);
-        }
-
         if *pool_mint_info.key
             != spl_token::state::Account::unpack_from_slice(&manager_fee_info.data.borrow())?.mint
             || *pool_mint_info.key
                 != spl_token::state::Account::unpack_from_slice(&treasury_fee_info.data.borrow())?
-                    .mint
-            || *pool_mint_info.key
-                != spl_token::state::Account::unpack_from_slice(&validator_fee_info.data.borrow())?
                     .mint
         {
             return Err(StakePoolError::WrongAccountMint.into());
@@ -740,8 +725,6 @@ impl Processor {
         stake_pool.rate_of_exchange = None;
         stake_pool.treasury_fee_account = *treasury_fee_info.key;
         stake_pool.treasury_fee = treasury_fee;
-        stake_pool.validator_fee_account = *validator_fee_info.key;
-        stake_pool.validator_fee = validator_fee;
         stake_pool.total_lamports_liquidity = 0;
 
         let pool_tokens_minted = stake_pool
@@ -1710,7 +1693,6 @@ impl Processor {
         let manager_fee_info = next_account_info(account_info_iter)?;
         let pool_mint_info = next_account_info(account_info_iter)?;
         let treasury_info = next_account_info(account_info_iter)?;
-        let validator_fee_info = next_account_info(account_info_iter)?;
         let token_program_info = next_account_info(account_info_iter)?;
 
         let clock = Clock::get()?;
@@ -1807,22 +1789,6 @@ impl Processor {
                     AUTHORITY_WITHDRAW,
                     stake_pool.stake_withdraw_bump_seed,
                     treasury_fee,
-                )?;
-            }
-
-            let validator_fee = stake_pool
-                .calc_pool_tokens_validator_fee(reward_lamports)
-                .ok_or(StakePoolError::CalculationFailure)?;
-            if validator_fee > 0 {
-                Self::token_mint_to(
-                    stake_pool_info.key,
-                    token_program_info.clone(),
-                    pool_mint_info.clone(),
-                    validator_fee_info.clone(),
-                    withdraw_info.clone(),
-                    AUTHORITY_WITHDRAW,
-                    stake_pool.stake_withdraw_bump_seed,
-                    validator_fee,
                 )?;
             }
 
@@ -2933,78 +2899,6 @@ impl Processor {
         Ok(())
     }
 
-    /// DELETE
-    #[inline(never)] // needed to avoid stack size violation
-    fn process_change_structure(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-    ) -> ProgramResult {
-        let account_info_iter = &mut accounts.iter();
-        let stake_pool_info = next_account_info(account_info_iter)?;
-        let manager_info = next_account_info(account_info_iter)?;
-
-        check_account_owner(stake_pool_info, program_id)?;
-        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
-        if !stake_pool.is_valid() {
-            return Err(StakePoolError::InvalidState.into());
-        }
-
-        if stake_pool.last_update_epoch < Clock::get()?.epoch {
-            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
-        }
-
-        stake_pool.check_manager(manager_info)?;
-
-        let stake_pool_instance_length = get_instance_packed_len(&stake_pool)?;
-
-        let stake_pool_changed = StakePoolChanged {
-            account_type: stake_pool.account_type,
-            manager: stake_pool.manager,
-            staker: stake_pool.staker,
-            stake_deposit_authority: stake_pool.stake_deposit_authority,
-            stake_withdraw_bump_seed: stake_pool.stake_withdraw_bump_seed,
-            validator_list: stake_pool.validator_list,
-            reserve_stake: stake_pool.reserve_stake,
-            pool_mint: stake_pool.pool_mint,
-            manager_fee_account: stake_pool.manager_fee_account,
-            token_program_id: stake_pool.token_program_id,
-            total_lamports: stake_pool.total_lamports,
-            pool_token_supply: stake_pool.pool_token_supply,
-            last_update_epoch: stake_pool.last_update_epoch,
-            lockup: stake_pool.lockup,
-            epoch_fee: stake_pool.epoch_fee,
-            next_epoch_fee: stake_pool.next_epoch_fee,
-            preferred_deposit_validator_vote_address: stake_pool.preferred_deposit_validator_vote_address,
-            preferred_withdraw_validator_vote_address: stake_pool.preferred_withdraw_validator_vote_address,
-            stake_deposit_fee: stake_pool.stake_deposit_fee,
-            stake_withdrawal_fee: stake_pool.stake_withdrawal_fee,
-            next_stake_withdrawal_fee: stake_pool.next_stake_withdrawal_fee,
-            stake_referral_fee: stake_pool.stake_referral_fee,
-            sol_deposit_authority: stake_pool.sol_deposit_authority,
-            sol_deposit_fee: stake_pool.sol_deposit_fee,
-            sol_referral_fee: stake_pool.sol_referral_fee,
-            sol_withdraw_authority: stake_pool.sol_withdraw_authority,
-            sol_withdrawal_fee: stake_pool.sol_withdrawal_fee,
-            next_sol_withdrawal_fee: stake_pool.next_sol_withdrawal_fee,
-            last_epoch_pool_token_supply: stake_pool.last_epoch_pool_token_supply,
-            last_epoch_total_lamports: stake_pool.last_epoch_total_lamports,
-            rate_of_exchange: stake_pool.rate_of_exchange,
-            treasury_fee_account: stake_pool.treasury_fee_account,
-            treasury_fee: stake_pool.treasury_fee,
-            total_lamports_liquidity: 0
-        };
-
-        if stake_pool_instance_length < get_instance_packed_len(&stake_pool_changed)? {
-            msg!("New structure size is bigger");
-
-            return Err(StakePoolError::InvalidState.into());
-        }
-
-        stake_pool_changed.serialize(&mut *stake_pool_info.data.borrow_mut())?;
-
-        Ok(())
-    }
-
     /// Processes [Instruction](enum.Instruction.html).
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = StakePoolInstruction::try_from_slice(input)?;
@@ -3014,7 +2908,6 @@ impl Processor {
                 withdrawal_fee,
                 deposit_fee,
                 treasury_fee,
-                validator_fee,
                 referral_fee,
                 max_validators,
             } => {
@@ -3026,7 +2919,6 @@ impl Processor {
                     withdrawal_fee,
                     deposit_fee,
                     treasury_fee,
-                    validator_fee,
                     referral_fee,
                     max_validators,
                 )
@@ -3134,10 +3026,6 @@ impl Processor {
             StakePoolInstruction::WithdrawLiquiditySol(lamports) => {
                 msg!("Instruction: WithdrawLiquiditySol");
                 Self::process_withdraw_liquidity_sol(program_id, accounts, lamports)
-            }
-            StakePoolInstruction::ChangeStructure => {
-                msg!("Instruction: ChnageStructure");
-                Self::process_change_structure(program_id, accounts)
             }
         }
     }
