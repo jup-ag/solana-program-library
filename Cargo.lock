@@ -3590,9 +3590,9 @@ dependencies = [
 
 [[package]]
 name = "solana-zk-token-sdk"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f79e20a90b9e8c10baa62cbb396fd9af6a1e3d7b0c1c3ce84189d08d0f273ea8"
+checksum = "9799d68a8e0c6e4a3dff62d9938666c5a710fa88dbd0627524e03695fdd8025b"
 dependencies = [
  "aes-gcm-siv",
  "arrayref",
@@ -3657,11 +3657,16 @@ dependencies = [
 name = "spl-associated-token-account"
 version = "1.0.5"
 dependencies = [
+ "assert_matches",
  "borsh",
+ "num-derive",
+ "num-traits",
  "solana-program",
  "solana-program-test",
  "solana-sdk",
  "spl-token 3.3.0",
+ "spl-token-2022",
+ "thiserror",
 ]
 
 [[package]]
@@ -3752,7 +3757,7 @@ dependencies = [
 
 [[package]]
 name = "spl-governance"
-version = "2.1.5"
+version = "2.2.3"
 dependencies = [
  "arrayref",
  "assert_matches",
@@ -3767,6 +3772,8 @@ dependencies = [
  "solana-program",
  "solana-program-test",
  "solana-sdk",
+ "spl-governance-addin-api",
+ "spl-governance-addin-mock",
  "spl-governance-test-sdk",
  "spl-governance-tools",
  "spl-token 3.3.0",
@@ -3774,8 +3781,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "spl-governance-addin-api"
+version = "0.1.1"
+dependencies = [
+ "borsh",
+ "solana-program",
+ "spl-governance-tools",
+]
+
+[[package]]
 name = "spl-governance-addin-mock"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrayref",
  "assert_matches",
@@ -3790,7 +3806,7 @@ dependencies = [
  "solana-program",
  "solana-program-test",
  "solana-sdk",
- "spl-governance",
+ "spl-governance-addin-api",
  "spl-governance-test-sdk",
  "spl-governance-tools",
  "spl-token 3.3.0",
@@ -3799,7 +3815,7 @@ dependencies = [
 
 [[package]]
 name = "spl-governance-chat"
-version = "0.2.0"
+version = "0.2.4"
 dependencies = [
  "arrayref",
  "assert_matches",
@@ -3815,6 +3831,7 @@ dependencies = [
  "solana-program-test",
  "solana-sdk",
  "spl-governance",
+ "spl-governance-addin-api",
  "spl-governance-addin-mock",
  "spl-governance-test-sdk",
  "spl-governance-tools",
@@ -3824,7 +3841,7 @@ dependencies = [
 
 [[package]]
 name = "spl-governance-test-sdk"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "arrayref",
  "bincode",
@@ -3843,7 +3860,7 @@ dependencies = [
 
 [[package]]
 name = "spl-governance-tools"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "arrayref",
  "bincode",
@@ -3930,7 +3947,7 @@ dependencies = [
 
 [[package]]
 name = "spl-stake-pool"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "arrayref",
  "bincode",
@@ -3952,7 +3969,7 @@ dependencies = [
 
 [[package]]
 name = "spl-stake-pool-cli"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "bincode",
  "borsh",
@@ -3995,6 +4012,7 @@ name = "spl-token"
 version = "3.3.0"
 dependencies = [
  "arrayref",
+ "lazy_static",
  "num-derive",
  "num-traits",
  "num_enum",
@@ -4006,7 +4024,7 @@ dependencies = [
 
 [[package]]
 name = "spl-token-2022"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arrayref",
  "bytemuck",
@@ -4018,8 +4036,20 @@ dependencies = [
  "solana-program-test",
  "solana-sdk",
  "solana-zk-token-sdk",
- "spl-token-client",
+ "spl-token 3.3.0",
  "thiserror",
+]
+
+[[package]]
+name = "spl-token-2022-test"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "solana-program-test",
+ "solana-sdk",
+ "spl-associated-token-account 1.0.5",
+ "spl-token-2022",
+ "spl-token-client",
 ]
 
 [[package]]
@@ -4055,6 +4085,7 @@ dependencies = [
  "solana-program-test",
  "solana-sdk",
  "spl-associated-token-account 1.0.5",
+ "spl-memo 3.0.1",
  "spl-token-2022",
  "thiserror",
 ]

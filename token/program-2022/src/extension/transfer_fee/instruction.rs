@@ -6,6 +6,7 @@ use {
         program_option::COption,
         pubkey::Pubkey,
     },
+    std::convert::TryFrom,
 };
 
 /// Transfer Fee extension instructions
@@ -95,7 +96,10 @@ pub enum TransferFeeInstruction {
     ///   2. `[]` The mint's `withdraw_withheld_authority`'s multisignature owner/delegate.
     ///   3. ..3+M `[signer]` M signer accounts.
     ///   3+M+1. ..3+M+N `[writable]` The source accounts to withdraw from.
-    WithdrawWithheldTokensFromAccounts,
+    WithdrawWithheldTokensFromAccounts {
+        /// Number of token accounts harvested
+        num_token_accounts: u8,
+    },
     /// Permissionless instruction to transfer all withheld tokens to the mint.
     ///
     /// Succeeds for frozen accounts.
@@ -161,7 +165,11 @@ impl TransferFeeInstruction {
                 (instruction, rest)
             }
             2 => (Self::WithdrawWithheldTokensFromMint, rest),
-            3 => (Self::WithdrawWithheldTokensFromAccounts, rest),
+            3 => {
+                let (&num_token_accounts, rest) = rest.split_first().ok_or(InvalidInstruction)?;
+                let instruction = Self::WithdrawWithheldTokensFromAccounts { num_token_accounts };
+                (instruction, rest)
+            }
             4 => (Self::HarvestWithheldTokensToMint, rest),
             5 => {
                 let (transfer_fee_basis_points, rest) = TokenInstruction::unpack_u16(rest)?;
@@ -204,8 +212,9 @@ impl TransferFeeInstruction {
             Self::WithdrawWithheldTokensFromMint => {
                 buffer.push(2);
             }
-            Self::WithdrawWithheldTokensFromAccounts => {
+            Self::WithdrawWithheldTokensFromAccounts { num_token_accounts } => {
                 buffer.push(3);
+                buffer.push(num_token_accounts);
             }
             Self::HarvestWithheldTokensToMint => {
                 buffer.push(4);
@@ -326,6 +335,8 @@ pub fn withdraw_withheld_tokens_from_accounts(
     sources: &[&Pubkey],
 ) -> Result<Instruction, ProgramError> {
     check_program_account(token_program_id)?;
+    let num_token_accounts =
+        u8::try_from(sources.len()).map_err(|_| ProgramError::InvalidInstructionData)?;
     let mut accounts = Vec::with_capacity(3 + signers.len() + sources.len());
     accounts.push(AccountMeta::new_readonly(*mint, false));
     accounts.push(AccountMeta::new(*destination, false));
@@ -341,7 +352,7 @@ pub fn withdraw_withheld_tokens_from_accounts(
         program_id: *token_program_id,
         accounts,
         data: TokenInstruction::TransferFeeExtension(
-            TransferFeeInstruction::WithdrawWithheldTokensFromAccounts,
+            TransferFeeInstruction::WithdrawWithheldTokensFromAccounts { num_token_accounts },
         )
         .pack(),
     })
@@ -401,6 +412,8 @@ pub fn set_transfer_fee(
 mod test {
     use super::*;
 
+    const TRANSFER_FEE_PREFIX: u8 = 24;
+
     #[test]
     fn test_instruction_packing() {
         let check = TokenInstruction::TransferFeeExtension(
@@ -412,7 +425,7 @@ mod test {
             },
         );
         let packed = check.pack();
-        let mut expect = vec![23u8, 0, 1];
+        let mut expect = vec![TRANSFER_FEE_PREFIX, 0, 1];
         expect.extend_from_slice(&[11u8; 32]);
         expect.extend_from_slice(&[0]);
         expect.extend_from_slice(&111u16.to_le_bytes());
@@ -429,7 +442,7 @@ mod test {
             },
         );
         let packed = check.pack();
-        let mut expect = vec![23u8, 1];
+        let mut expect = vec![TRANSFER_FEE_PREFIX, 1];
         expect.extend_from_slice(&24u64.to_le_bytes());
         expect.extend_from_slice(&[24u8]);
         expect.extend_from_slice(&23u64.to_le_bytes());
@@ -441,16 +454,17 @@ mod test {
             TransferFeeInstruction::WithdrawWithheldTokensFromMint,
         );
         let packed = check.pack();
-        let expect = [23u8, 2];
+        let expect = [TRANSFER_FEE_PREFIX, 2];
         assert_eq!(packed, expect);
         let unpacked = TokenInstruction::unpack(&expect).unwrap();
         assert_eq!(unpacked, check);
 
+        let num_token_accounts = 255;
         let check = TokenInstruction::TransferFeeExtension(
-            TransferFeeInstruction::WithdrawWithheldTokensFromAccounts,
+            TransferFeeInstruction::WithdrawWithheldTokensFromAccounts { num_token_accounts },
         );
         let packed = check.pack();
-        let expect = [23u8, 3];
+        let expect = [TRANSFER_FEE_PREFIX, 3, num_token_accounts];
         assert_eq!(packed, expect);
         let unpacked = TokenInstruction::unpack(&expect).unwrap();
         assert_eq!(unpacked, check);
@@ -459,7 +473,7 @@ mod test {
             TransferFeeInstruction::HarvestWithheldTokensToMint,
         );
         let packed = check.pack();
-        let expect = [23u8, 4];
+        let expect = [TRANSFER_FEE_PREFIX, 4];
         assert_eq!(packed, expect);
         let unpacked = TokenInstruction::unpack(&expect).unwrap();
         assert_eq!(unpacked, check);
@@ -470,7 +484,7 @@ mod test {
                 maximum_fee: u64::MAX,
             });
         let packed = check.pack();
-        let mut expect = vec![23u8, 5];
+        let mut expect = vec![TRANSFER_FEE_PREFIX, 5];
         expect.extend_from_slice(&u16::MAX.to_le_bytes());
         expect.extend_from_slice(&u64::MAX.to_le_bytes());
         assert_eq!(packed, expect);

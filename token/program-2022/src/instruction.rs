@@ -2,15 +2,16 @@
 
 use {
     crate::{
-        check_program_account, error::TokenError,
-        extension::transfer_fee::instruction::TransferFeeInstruction,
+        check_program_account, check_spl_token_program_account,
+        error::TokenError,
+        extension::{transfer_fee::instruction::TransferFeeInstruction, ExtensionType},
     },
     solana_program::{
         instruction::{AccountMeta, Instruction},
         program_error::ProgramError,
         program_option::COption,
         pubkey::{Pubkey, PUBKEY_BYTES},
-        sysvar,
+        system_program, sysvar,
     },
     std::{convert::TryInto, mem::size_of},
 };
@@ -151,11 +152,11 @@ pub enum TokenInstruction {
     ///
     ///   * Single owner
     ///   0. `[writable]` The source account.
-    ///   1. `[signer]` The source account owner.
+    ///   1. `[signer]` The source account owner or current delegate.
     ///
     ///   * Multisignature owner
     ///   0. `[writable]` The source account.
-    ///   1. `[]` The source account's multisignature owner.
+    ///   1. `[]` The source account's multisignature owner or current delegate.
     ///   2. ..2+M `[signer]` M signer accounts
     Revoke,
     /// Sets a new authority of a mint or account.
@@ -451,7 +452,23 @@ pub enum TokenInstruction {
     /// Accounts expected by this instruction:
     ///
     ///   0. `[]` The mint to calculate for
-    GetAccountDataSize,
+    GetAccountDataSize {
+        /// Additional extension types to include in the returned account size
+        extension_types: Vec<ExtensionType>,
+    },
+    /// Initialize the Immutable Owner extension for the given token account
+    ///
+    /// Fails if the account has already been initialized, so must be called before
+    /// `InitializeAccount`.
+    ///
+    /// Accounts expected by this instruction:
+    ///
+    ///   0. `[writable]`  The account to initialize.
+    ///
+    /// Data expected by this instruction:
+    ///   None
+    ///
+    InitializeImmutableOwner,
     /// Initialize the close account authority on a new mint.
     ///
     /// Fails if the mint has already been initialized, so must be called before
@@ -483,6 +500,46 @@ pub enum TokenInstruction {
     /// See `extension::default_account_state::instruction::DefaultAccountStateInstruction` for
     /// further details about the extended instructions that share this instruction prefix
     DefaultAccountStateExtension,
+    /// Check to see if a token account is large enough for a list of ExtensionTypes, and if not,
+    /// use reallocation to increase the data size.
+    ///
+    /// Accounts expected by this instruction:
+    ///
+    ///   * Single owner
+    ///   0. `[writable]` The account to reallocate.
+    ///   1. `[signer, writable]` The payer account to fund reallocation
+    ///   2. `[]` System program for reallocation funding
+    ///   3. `[signer]` The account's owner.
+    ///
+    ///   * Multisignature owner
+    ///   0. `[writable]` The account to reallocate.
+    ///   1. `[signer, writable]` The payer account to fund reallocation
+    ///   2. `[]` System program for reallocation funding
+    ///   3. `[]` The account's multisignature owner/delegate.
+    ///   4. ..4+M `[signer]` M signer accounts.
+    ///
+    Reallocate {
+        /// New extension types to include in the reallocated account
+        extension_types: Vec<ExtensionType>,
+    },
+    /// The common instruction prefix for Memo Transfer account extension instructions.
+    ///
+    /// See `extension::memo_transfer::instruction::RequiredMemoTransfersInstruction` for
+    /// further details about the extended instructions that share this instruction prefix
+    MemoTransferExtension,
+    /// Creates the native mint.
+    ///
+    /// This instruction only needs to be invoked once after deployment and is permissionless,
+    /// Wrapped SOL (`native_mint::id()`) will not be available until this instruction is
+    /// successfully executed.
+    ///
+    /// Accounts expected by this instruction:
+    ///
+    ///   0. `[writeable,signer]` Funding account (must be a system account)
+    ///   1. `[writable]` The native mint address
+    ///   2. `[]` System program for mint account funding
+    ///
+    CreateNativeMint,
 }
 impl TokenInstruction {
     /// Unpacks a byte buffer into a [TokenInstruction](enum.TokenInstruction.html).
@@ -576,17 +633,33 @@ impl TokenInstruction {
                     decimals,
                 }
             }
-            21 => Self::GetAccountDataSize,
-            22 => {
+            21 => {
+                let mut extension_types = vec![];
+                for chunk in rest.chunks(size_of::<ExtensionType>()) {
+                    extension_types.push(chunk.try_into()?);
+                }
+                Self::GetAccountDataSize { extension_types }
+            }
+            22 => Self::InitializeImmutableOwner,
+            23 => {
                 let (close_authority, _rest) = Self::unpack_pubkey_option(rest)?;
                 Self::InitializeMintCloseAuthority { close_authority }
             }
-            23 => {
+            24 => {
                 let (instruction, _rest) = TransferFeeInstruction::unpack(rest)?;
                 Self::TransferFeeExtension(instruction)
             }
-            24 => Self::ConfidentialTransferExtension,
-            25 => Self::DefaultAccountStateExtension,
+            25 => Self::ConfidentialTransferExtension,
+            26 => Self::DefaultAccountStateExtension,
+            27 => {
+                let mut extension_types = vec![];
+                for chunk in rest.chunks(size_of::<ExtensionType>()) {
+                    extension_types.push(chunk.try_into()?);
+                }
+                Self::Reallocate { extension_types }
+            }
+            28 => Self::MemoTransferExtension,
+            29 => Self::CreateNativeMint,
             _ => return Err(TokenError::InvalidInstruction.into()),
         })
     }
@@ -684,24 +757,46 @@ impl TokenInstruction {
                 buf.extend_from_slice(mint_authority.as_ref());
                 Self::pack_pubkey_option(freeze_authority, &mut buf);
             }
-            &Self::GetAccountDataSize => {
+            &Self::GetAccountDataSize {
+                ref extension_types,
+            } => {
                 buf.push(21);
+                for extension_type in extension_types {
+                    buf.extend_from_slice(&<[u8; 2]>::from(*extension_type));
+                }
+            }
+            &Self::InitializeImmutableOwner => {
+                buf.push(22);
             }
             &Self::InitializeMintCloseAuthority {
                 ref close_authority,
             } => {
-                buf.push(22);
+                buf.push(23);
                 Self::pack_pubkey_option(close_authority, &mut buf);
             }
             &Self::TransferFeeExtension(ref instruction) => {
-                buf.push(23);
+                buf.push(24);
                 TransferFeeInstruction::pack(instruction, &mut buf);
             }
             &Self::ConfidentialTransferExtension => {
-                buf.push(24);
+                buf.push(25);
             }
             &Self::DefaultAccountStateExtension => {
-                buf.push(25);
+                buf.push(26);
+            }
+            &Self::Reallocate {
+                ref extension_types,
+            } => {
+                buf.push(27);
+                for extension_type in extension_types {
+                    buf.extend_from_slice(&<[u8; 2]>::from(*extension_type));
+                }
+            }
+            &Self::MemoTransferExtension => {
+                buf.push(28);
+            }
+            &Self::CreateNativeMint => {
+                buf.push(29);
             }
         };
         buf
@@ -814,7 +909,7 @@ pub fn initialize_mint(
     freeze_authority_pubkey: Option<&Pubkey>,
     decimals: u8,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let freeze_authority = freeze_authority_pubkey.cloned().into();
     let data = TokenInstruction::InitializeMint {
         mint_authority: *mint_authority_pubkey,
@@ -843,7 +938,7 @@ pub fn initialize_mint2(
     freeze_authority_pubkey: Option<&Pubkey>,
     decimals: u8,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let freeze_authority = freeze_authority_pubkey.cloned().into();
     let data = TokenInstruction::InitializeMint2 {
         mint_authority: *mint_authority_pubkey,
@@ -868,7 +963,7 @@ pub fn initialize_account(
     mint_pubkey: &Pubkey,
     owner_pubkey: &Pubkey,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::InitializeAccount.pack();
 
     let accounts = vec![
@@ -892,7 +987,7 @@ pub fn initialize_account2(
     mint_pubkey: &Pubkey,
     owner_pubkey: &Pubkey,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::InitializeAccount2 {
         owner: *owner_pubkey,
     }
@@ -918,7 +1013,7 @@ pub fn initialize_account3(
     mint_pubkey: &Pubkey,
     owner_pubkey: &Pubkey,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::InitializeAccount3 {
         owner: *owner_pubkey,
     }
@@ -943,7 +1038,7 @@ pub fn initialize_multisig(
     signer_pubkeys: &[&Pubkey],
     m: u8,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     if !is_valid_signer_index(m as usize)
         || !is_valid_signer_index(signer_pubkeys.len())
         || m as usize > signer_pubkeys.len()
@@ -973,7 +1068,7 @@ pub fn initialize_multisig2(
     signer_pubkeys: &[&Pubkey],
     m: u8,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     if !is_valid_signer_index(m as usize)
         || !is_valid_signer_index(signer_pubkeys.len())
         || m as usize > signer_pubkeys.len()
@@ -1008,7 +1103,7 @@ pub fn transfer(
     signer_pubkeys: &[&Pubkey],
     amount: u64,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     #[allow(deprecated)]
     let data = TokenInstruction::Transfer { amount }.pack();
 
@@ -1039,7 +1134,7 @@ pub fn approve(
     signer_pubkeys: &[&Pubkey],
     amount: u64,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::Approve { amount }.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -1067,7 +1162,7 @@ pub fn revoke(
     owner_pubkey: &Pubkey,
     signer_pubkeys: &[&Pubkey],
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::Revoke.pack();
 
     let mut accounts = Vec::with_capacity(2 + signer_pubkeys.len());
@@ -1096,7 +1191,7 @@ pub fn set_authority(
     owner_pubkey: &Pubkey,
     signer_pubkeys: &[&Pubkey],
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let new_authority = new_authority_pubkey.cloned().into();
     let data = TokenInstruction::SetAuthority {
         authority_type,
@@ -1130,7 +1225,7 @@ pub fn mint_to(
     signer_pubkeys: &[&Pubkey],
     amount: u64,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::MintTo { amount }.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -1160,7 +1255,7 @@ pub fn burn(
     signer_pubkeys: &[&Pubkey],
     amount: u64,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::Burn { amount }.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -1189,7 +1284,7 @@ pub fn close_account(
     owner_pubkey: &Pubkey,
     signer_pubkeys: &[&Pubkey],
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::CloseAccount.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -1218,7 +1313,7 @@ pub fn freeze_account(
     owner_pubkey: &Pubkey,
     signer_pubkeys: &[&Pubkey],
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::FreezeAccount.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -1247,7 +1342,7 @@ pub fn thaw_account(
     owner_pubkey: &Pubkey,
     signer_pubkeys: &[&Pubkey],
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::ThawAccount.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -1280,7 +1375,7 @@ pub fn transfer_checked(
     amount: u64,
     decimals: u8,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::TransferChecked { amount, decimals }.pack();
 
     let mut accounts = Vec::with_capacity(4 + signer_pubkeys.len());
@@ -1314,7 +1409,7 @@ pub fn approve_checked(
     amount: u64,
     decimals: u8,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::ApproveChecked { amount, decimals }.pack();
 
     let mut accounts = Vec::with_capacity(4 + signer_pubkeys.len());
@@ -1346,7 +1441,7 @@ pub fn mint_to_checked(
     amount: u64,
     decimals: u8,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::MintToChecked { amount, decimals }.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -1377,7 +1472,7 @@ pub fn burn_checked(
     amount: u64,
     decimals: u8,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     let data = TokenInstruction::BurnChecked { amount, decimals }.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -1403,7 +1498,7 @@ pub fn sync_native(
     token_program_id: &Pubkey,
     account_pubkey: &Pubkey,
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
 
     Ok(Instruction {
         program_id: *token_program_id,
@@ -1416,12 +1511,16 @@ pub fn sync_native(
 pub fn get_account_data_size(
     token_program_id: &Pubkey,
     mint_pubkey: &Pubkey,
+    extension_types: &[ExtensionType],
 ) -> Result<Instruction, ProgramError> {
-    check_program_account(token_program_id)?;
+    check_spl_token_program_account(token_program_id)?;
     Ok(Instruction {
         program_id: *token_program_id,
         accounts: vec![AccountMeta::new_readonly(*mint_pubkey, false)],
-        data: TokenInstruction::GetAccountDataSize.pack(),
+        data: TokenInstruction::GetAccountDataSize {
+            extension_types: extension_types.to_vec(),
+        }
+        .pack(),
     })
 }
 
@@ -1437,6 +1536,70 @@ pub fn initialize_mint_close_authority(
         program_id: *token_program_id,
         accounts: vec![AccountMeta::new(*mint_pubkey, false)],
         data: TokenInstruction::InitializeMintCloseAuthority { close_authority }.pack(),
+    })
+}
+
+/// Create an `InitializeImmutableOwner` instruction
+pub fn initialize_immutable_owner(
+    token_program_id: &Pubkey,
+    token_account: &Pubkey,
+) -> Result<Instruction, ProgramError> {
+    check_spl_token_program_account(token_program_id)?;
+    Ok(Instruction {
+        program_id: *token_program_id,
+        accounts: vec![AccountMeta::new(*token_account, false)],
+        data: TokenInstruction::InitializeImmutableOwner.pack(),
+    })
+}
+
+/// Creates a `Reallocate` instruction
+pub fn reallocate(
+    token_program_id: &Pubkey,
+    account_pubkey: &Pubkey,
+    payer: &Pubkey,
+    owner_pubkey: &Pubkey,
+    signer_pubkeys: &[&Pubkey],
+    extension_types: &[ExtensionType],
+) -> Result<Instruction, ProgramError> {
+    check_program_account(token_program_id)?;
+
+    let mut accounts = Vec::with_capacity(4 + signer_pubkeys.len());
+    accounts.push(AccountMeta::new(*account_pubkey, false));
+    accounts.push(AccountMeta::new(*payer, true));
+    accounts.push(AccountMeta::new_readonly(system_program::id(), false));
+    accounts.push(AccountMeta::new_readonly(
+        *owner_pubkey,
+        signer_pubkeys.is_empty(),
+    ));
+    for signer_pubkey in signer_pubkeys.iter() {
+        accounts.push(AccountMeta::new_readonly(**signer_pubkey, true));
+    }
+
+    Ok(Instruction {
+        program_id: *token_program_id,
+        accounts,
+        data: TokenInstruction::Reallocate {
+            extension_types: extension_types.to_vec(),
+        }
+        .pack(),
+    })
+}
+
+/// Creates a `CreateNativeMint` instruction
+pub fn create_native_mint(
+    token_program_id: &Pubkey,
+    payer: &Pubkey,
+) -> Result<Instruction, ProgramError> {
+    check_program_account(token_program_id)?;
+
+    Ok(Instruction {
+        program_id: *token_program_id,
+        accounts: vec![
+            AccountMeta::new(*payer, true),
+            AccountMeta::new(crate::native_mint::id(), false),
+            AccountMeta::new_readonly(system_program::id(), false),
+        ],
+        data: TokenInstruction::CreateNativeMint.pack(),
     })
 }
 
@@ -1662,10 +1825,24 @@ mod test {
         let unpacked = TokenInstruction::unpack(&expect).unwrap();
         assert_eq!(unpacked, check);
 
-        let check = TokenInstruction::GetAccountDataSize;
+        let check = TokenInstruction::GetAccountDataSize {
+            extension_types: vec![],
+        };
         let packed = check.pack();
         let expect = [21u8];
         assert_eq!(packed, &[21u8]);
+        let unpacked = TokenInstruction::unpack(&expect).unwrap();
+        assert_eq!(unpacked, check);
+
+        let check = TokenInstruction::GetAccountDataSize {
+            extension_types: vec![
+                ExtensionType::TransferFeeConfig,
+                ExtensionType::TransferFeeAmount,
+            ],
+        };
+        let packed = check.pack();
+        let expect = [21u8, 1, 0, 2, 0];
+        assert_eq!(packed, &[21u8, 1, 0, 2, 0]);
         let unpacked = TokenInstruction::unpack(&expect).unwrap();
         assert_eq!(unpacked, check);
 
@@ -1673,8 +1850,15 @@ mod test {
             close_authority: COption::Some(Pubkey::new(&[10u8; 32])),
         };
         let packed = check.pack();
-        let mut expect = vec![22u8, 1];
+        let mut expect = vec![23u8, 1];
         expect.extend_from_slice(&[10u8; 32]);
+        assert_eq!(packed, expect);
+        let unpacked = TokenInstruction::unpack(&expect).unwrap();
+        assert_eq!(unpacked, check);
+
+        let check = TokenInstruction::CreateNativeMint;
+        let packed = check.pack();
+        let expect = vec![29u8];
         assert_eq!(packed, expect);
         let unpacked = TokenInstruction::unpack(&expect).unwrap();
         assert_eq!(unpacked, check);
