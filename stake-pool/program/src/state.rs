@@ -852,6 +852,61 @@ impl fmt::Display for RateOfExchange {
     }
 }
 
+/// Finds Pda adresses by common simple rule
+pub trait SimplePda {
+    /// Find PDA 
+    fn find_address(
+        program_id: &Pubkey,
+        stake_pool_address: &Pubkey,
+    ) -> (Pubkey, u8) {
+        Pubkey::find_program_address(
+            &[
+                Self::get_seed_prefix(),
+                &stake_pool_address.to_bytes()[..],
+                &program_id.to_bytes()[..]
+            ],
+            program_id
+        )
+    }
+
+     /// Get seed prefix for Pda
+    fn get_seed_prefix() -> &'static [u8];
+}
+
+/// Initialized DAO`s Community token`s mint detail
+#[repr(C)]
+#[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct CommunityToken {
+    /// Token`s mint address
+    pub token_mint: Pubkey
+}
+impl CommunityToken {
+    /// Seed prefix for PDA
+    const SEED_PREFIX: &'static [u8] = b"community_token";
+}
+impl SimplePda for CommunityToken {
+    fn get_seed_prefix() -> &'static [u8] {
+        return Self::SEED_PREFIX;
+    }
+}
+
+/// Initialized DAO state
+#[repr(C)]
+#[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct DaoState {
+    /// Is DAO enabled for StakePool
+    pub is_enabled: bool
+}
+impl DaoState {
+    /// Seed prefix for PDA
+    const SEED_PREFIX: &'static [u8] = b"dao_state";
+}
+impl SimplePda for DaoState {
+    fn get_seed_prefix() -> &'static [u8] {
+        return Self::SEED_PREFIX;
+    }
+}
+
 #[cfg(test)]
 mod test {
     use {

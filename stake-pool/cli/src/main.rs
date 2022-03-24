@@ -45,7 +45,7 @@ use {
         self, find_stake_program_address, find_transient_stake_program_address,
         find_withdraw_authority_program_address,
         instruction::{FundingType, PreferredValidatorType},
-        state::{Fee, FeeType, StakePool, ValidatorList},
+        state::{Fee, FeeType, StakePool, ValidatorList, SimplePda, CommunityToken, DaoState},
         MINIMUM_ACTIVE_STAKE,
     },
     std::cmp::Ordering,
@@ -355,6 +355,7 @@ fn command_create_pool(
     mint_keypair: Option<Keypair>,
     reserve_keypair: Option<Keypair>,
     treasury_keypair: Option<Keypair>,
+    with_community_token: bool,
     unsafe_fees: bool,
 ) -> CommandResult {
     if !unsafe_fees {
@@ -394,11 +395,16 @@ fn command_create_pool(
     let validator_list_balance = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(validator_list_size)?;
+    let dao_state_dto_length = get_packed_len::<DaoState>();
+    let rent_exemption_for_dao_state_dto_account = config
+    .rpc_client
+    .get_minimum_balance_for_rent_exemption(dao_state_dto_length)?;
     let mut total_rent_free_balances = reserve_stake_balance
         + mint_account_balance
         + pool_fee_account_balance
         + treasury_fee_account_balance
         + stake_pool_account_lamports
+        + rent_exemption_for_dao_state_dto_account
         + validator_list_balance;
 
     let default_decimals = spl_token::native_mint::DECIMALS;
@@ -417,7 +423,7 @@ fn command_create_pool(
         .rpc_client
         .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?;
 
-    let mut instructions = vec![
+    let mut setup_instructions = vec![
         // Account for the stake pool reserve
         system_instruction::create_account(
             &config.fee_payer.pubkey(),
@@ -471,57 +477,131 @@ fn command_create_pool(
         config,
         &mint_keypair.pubkey(),
         &config.manager.pubkey(),
-        &mut instructions,
+        &mut setup_instructions,
         &mut total_rent_free_balances,
     );
     println!("Creating pool fee collection account {}", pool_fee_account);
 
+    let mut setup_signers = vec![
+        config.fee_payer.as_ref(),
+        &mint_keypair,
+        &reserve_keypair,
+        &treasury_keypair,
+    ];
+
+    let mut initialize_instructions = vec![
+        // Validator stake account list storage
+        system_instruction::create_account(
+            &config.fee_payer.pubkey(),
+            &validator_list_keypair.pubkey(),
+            validator_list_balance,
+            validator_list_size as u64,
+            &spl_stake_pool::id(),
+        ),
+        // Account for the stake pool
+        system_instruction::create_account(
+            &config.fee_payer.pubkey(),
+            &stake_pool_keypair.pubkey(),
+            stake_pool_account_lamports,
+            get_packed_len::<StakePool>() as u64,
+            &spl_stake_pool::id(),
+        ),
+        // Initialize stake pool
+        spl_stake_pool::instruction::initialize(
+            &spl_stake_pool::id(),
+            &stake_pool_keypair.pubkey(),
+            &config.manager.pubkey(),
+            &config.staker.pubkey(),
+            &withdraw_authority,
+            &validator_list_keypair.pubkey(),
+            &reserve_keypair.pubkey(),
+            &mint_keypair.pubkey(),
+            &pool_fee_account,
+            &treasury_keypair.pubkey(),
+            &spl_token::id(),
+            deposit_authority.as_ref().map(|x| x.pubkey()),
+            epoch_fee,
+            withdrawal_fee,
+            deposit_fee,
+            referral_fee,
+            treasury_fee,
+            max_validators,
+        ),
+    ];
+
+    let mut initialize_signers = vec![
+        config.fee_payer.as_ref(),
+        &stake_pool_keypair,
+        &validator_list_keypair,
+        config.manager.as_ref(),
+    ];
+
+    let mut community_mint_keypair: Option<Keypair> = None;
+    let mut is_dao_enabled = false;
+    if with_community_token {
+        is_dao_enabled = true;
+
+        let community_token_dto_length = get_packed_len::<CommunityToken>();
+        let rent_exemption_for_community_token_dto_account = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(community_token_dto_length)?;
+        total_rent_free_balances = total_rent_free_balances + rent_exemption_for_community_token_dto_account;
+
+        community_mint_keypair = Some(Keypair::new());
+        println!("Creating community mint {}", community_mint_keypair.as_ref().unwrap().pubkey());
+
+        setup_instructions.push(
+            system_instruction::create_account(
+                &config.fee_payer.pubkey(),
+                &community_mint_keypair.as_ref().unwrap().pubkey(),
+                mint_account_balance,
+                spl_token::state::Mint::LEN as u64,
+                &spl_token::id(),
+            )
+        );
+        setup_instructions.push(
+            spl_token::instruction::initialize_mint(
+                &spl_token::id(),
+                &community_mint_keypair.as_ref().unwrap().pubkey(),
+                &withdraw_authority,
+                None,
+                default_decimals,
+            )?
+        );
+        setup_signers.push(community_mint_keypair.as_ref().unwrap());
+        
+        initialize_instructions.push(
+            spl_stake_pool::instruction::create_community_token(
+                &spl_stake_pool::id(),
+                &stake_pool_keypair.pubkey(),
+                &config.manager.pubkey(),
+                &CommunityToken::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0,
+                &community_mint_keypair.as_ref().unwrap().pubkey(),
+                rent_exemption_for_community_token_dto_account,
+                community_token_dto_length as u64
+            )
+        );
+    }
+    initialize_instructions.push(
+        spl_stake_pool::instruction::create_dao_state(
+            &spl_stake_pool::id(),
+            &stake_pool_keypair.pubkey(),
+            &config.manager.pubkey(),
+            &DaoState::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0,
+            is_dao_enabled,
+            rent_exemption_for_dao_state_dto_account,
+            dao_state_dto_length as u64
+        )
+    );
+
     let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
     let setup_message = Message::new_with_blockhash(
-        &instructions,
+        &setup_instructions,
         Some(&config.fee_payer.pubkey()),
         &recent_blockhash,
     );
     let initialize_message = Message::new_with_blockhash(
-        &[
-            // Validator stake account list storage
-            system_instruction::create_account(
-                &config.fee_payer.pubkey(),
-                &validator_list_keypair.pubkey(),
-                validator_list_balance,
-                validator_list_size as u64,
-                &spl_stake_pool::id(),
-            ),
-            // Account for the stake pool
-            system_instruction::create_account(
-                &config.fee_payer.pubkey(),
-                &stake_pool_keypair.pubkey(),
-                stake_pool_account_lamports,
-                get_packed_len::<StakePool>() as u64,
-                &spl_stake_pool::id(),
-            ),
-            // Initialize stake pool
-            spl_stake_pool::instruction::initialize(
-                &spl_stake_pool::id(),
-                &stake_pool_keypair.pubkey(),
-                &config.manager.pubkey(),
-                &config.staker.pubkey(),
-                &withdraw_authority,
-                &validator_list_keypair.pubkey(),
-                &reserve_keypair.pubkey(),
-                &mint_keypair.pubkey(),
-                &pool_fee_account,
-                &treasury_keypair.pubkey(),
-                &spl_token::id(),
-                deposit_authority.as_ref().map(|x| x.pubkey()),
-                epoch_fee,
-                withdrawal_fee,
-                deposit_fee,
-                referral_fee,
-                treasury_fee,
-                max_validators,
-            ),
-        ],
+        &initialize_instructions,
         Some(&config.fee_payer.pubkey()),
         &recent_blockhash,
     );
@@ -531,20 +611,9 @@ fn command_create_pool(
             + config.rpc_client.get_fee_for_message(&setup_message)?
             + config.rpc_client.get_fee_for_message(&initialize_message)?,
     )?;
-    let mut setup_signers = vec![
-        config.fee_payer.as_ref(),
-        &mint_keypair,
-        &reserve_keypair,
-        &treasury_keypair,
-    ];
+
     unique_signers!(setup_signers);
     let setup_transaction = Transaction::new(&setup_signers, setup_message, recent_blockhash);
-    let mut initialize_signers = vec![
-        config.fee_payer.as_ref(),
-        &stake_pool_keypair,
-        &validator_list_keypair,
-        config.manager.as_ref(),
-    ];
     let initialize_transaction = if let Some(deposit_authority) = deposit_authority {
         println!(
             "Deposits will be restricted to {} only, this can be changed using the set-funding-authority command.",
@@ -2476,6 +2545,100 @@ fn command_check_existing_validators() -> CommandResult {
     Ok(())
 }
 
+fn command_create_community_token(        // Форс рекриэйт Токена.  Изначально проверка на существование аккаунтов // TODO TODO TODO  ВОт тут только изменять состоянияе!!!!!!!!!!
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    from: &Option<Keypair>,
+) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+
+    let decimals = spl_token::native_mint::DECIMALS;
+
+    let community_mint_keypair = Keypair::new();
+    println!("Creating community mint {}", community_mint_keypair.pubkey());
+
+    let rent_exemption_for_token_mint_account = config
+    .rpc_client
+    .get_minimum_balance_for_rent_exemption(spl_token::state::Mint::LEN)?;
+
+    let community_token_dto_length = get_packed_len::<CommunityToken>();
+    let rent_exemption_for_community_token_dto_account = config
+    .rpc_client
+    .get_minimum_balance_for_rent_exemption(community_token_dto_length)?;
+
+    let dao_state_dto_length = get_packed_len::<DaoState>();
+    let rent_exemption_for_dao_state_dto_account = config
+    .rpc_client
+    .get_minimum_balance_for_rent_exemption(dao_state_dto_length)?;
+
+    let mut instructions = vec![
+        system_instruction::create_account(
+            &config.fee_payer.pubkey(),
+            &community_mint_keypair.pubkey(),
+            rent_exemption_for_token_mint_account,
+            spl_token::state::Mint::LEN as u64,
+            &spl_token::id(),
+        ),
+        spl_token::instruction::initialize_mint(
+            &spl_token::id(),
+            &community_mint_keypair.pubkey(),
+            &find_withdraw_authority_program_address(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+            ).0,
+            None,
+            decimals,
+        )?,
+        spl_stake_pool::instruction::create_dao_state(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &config.manager.pubkey(),
+            &DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0,
+            true,
+            rent_exemption_for_dao_state_dto_account,
+            dao_state_dto_length as u64
+        ),
+        spl_stake_pool::instruction::create_community_token(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &config.manager.pubkey(),
+            &CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0,
+            &community_mint_keypair.pubkey(),
+            rent_exemption_for_community_token_dto_account,
+            community_token_dto_length as u64
+        )
+    ];
+
+    let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+    let message = Message::new_with_blockhash(
+        &instructions,
+        Some(&config.fee_payer.pubkey()),
+        &recent_blockhash,
+    );
+
+    let total_consumption = rent_exemption_for_token_mint_account 
+        + rent_exemption_for_community_token_dto_account 
+        + rent_exemption_for_dao_state_dto_account
+        + config.rpc_client.get_fee_for_message(&message)?;
+    check_fee_payer_balance(
+        config,
+        total_consumption
+    )?;
+
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        &community_mint_keypair,
+        config.manager.as_ref(),
+    ];
+    unique_signers!(signers);
+
+    send_transaction(config, Transaction::new(&signers, message, recent_blockhash))?;
+
+    Ok(())
+}
+
 fn main() {
     solana_logger::setup_with_default("solana=info");
 
@@ -2716,6 +2879,13 @@ fn main() {
                     .value_name("PATH")
                     .takes_value(true)
                     .help("Treasury keypair [default: new keypair]"),
+            )
+            .arg(
+                Arg::with_name("with_community_token")
+                    .long("with-community-token")
+                    .takes_value(false)
+                    .help("Create DAO`s Community token`s mint"),
+
             )
             .arg(
                 Arg::with_name("unsafe_fees")
@@ -3440,6 +3610,26 @@ fn main() {
         .subcommand(SubCommand::with_name("check-existing-validators")
             .about("Check existing in stake pool validator`s list validators")
         )
+        .subcommand(SubCommand::with_name("create-community-token")
+        .about("Create DAO`s Community token`s mint")
+        .arg(
+            Arg::with_name("pool")
+                .index(1)
+                .validator(is_pubkey)
+                .value_name("POOL_ADDRESS")
+                .takes_value(true)
+                .required(true)
+                .help("Stake pool address"),
+        )
+        .arg(
+            Arg::with_name("from")
+                .long("from")
+                .validator(is_valid_signer)
+                .value_name("KEYPAIR")
+                .takes_value(true)
+                .help("Source account of funds. [default: cli config keypair]"),
+        )
+    )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -3550,6 +3740,7 @@ fn main() {
             let mint_keypair = keypair_of(arg_matches, "mint_keypair");
             let reserve_keypair = keypair_of(arg_matches, "reserve_keypair");
             let treasury_keypair = keypair_of(arg_matches, "treasury_keypair");
+            let with_community_token = arg_matches.is_present("with_community_token");
             let unsafe_fees = arg_matches.is_present("unsafe_fees");
             command_create_pool(
                 &config,
@@ -3577,6 +3768,7 @@ fn main() {
                 mint_keypair,
                 reserve_keypair,
                 treasury_keypair,
+                with_community_token,
                 unsafe_fees,
             )
         }
@@ -3859,6 +4051,11 @@ fn main() {
             command_check_accounts_for_rent_exempt(&config, &stake_pool_address)
         }
         ("check-existing-validators", Some(_arg_matches)) => command_check_existing_validators(),
+        ("create-community-token", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let from = keypair_of(arg_matches, "from");
+            command_create_community_token(&config, &stake_pool_address, &from)
+        }
         _ => unreachable!(),
     }
     .map_err(|err| {

@@ -404,6 +404,28 @@ pub enum StakePoolInstruction {
     ///   7. `[]` Stake program account
     ///   8. `[s]` (Optional) Stake pool sol withdraw authority
     WithdrawLiquiditySol(u64),
+
+    ///   Create DAO`s Community token`s mint
+    CreateCommunityToken {
+        ///   Community token`s mint adress
+        token_mint: Pubkey,
+        /// Number of lamports to transfer to the new account
+        lamports: u64,
+
+        /// Number of bytes of memory to allocate
+        space: u64,
+    },
+
+    ///   Create DAO`s Community token`s mint
+    CreateDaoState {
+        /// Is DAO enabled for StakePool
+        is_enabled: bool,
+        /// Number of lamports to transfer to the new account
+        lamports: u64,
+
+        /// Number of bytes of memory to allocate
+        space: u64,
+    },
 }
 
 /// Creates an 'initialize' instruction.
@@ -1424,6 +1446,66 @@ pub fn withdraw_liquidity_sol_with_authority(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::WithdrawLiquiditySol(amount)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instruction required to create DAO`s Community token`s mint.
+pub fn create_community_token(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    community_token_dto: &Pubkey,
+    token_mint: &Pubkey,
+    lamports: u64,
+    space: u64
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*community_token_dto, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::CreateCommunityToken {
+            token_mint: *token_mint,
+            lamports,
+            space
+        }
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instruction required to create DAO`s state
+pub fn create_dao_state(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    dao_state_dto: &Pubkey,
+    is_enabled: bool,
+    lamports: u64,
+    space: u64
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*dao_state_dto, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::CreateDaoState { 
+            is_enabled,
+            lamports,
+            space
+        }
             .try_to_vec()
             .unwrap(),
     }
