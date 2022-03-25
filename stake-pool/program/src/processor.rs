@@ -2953,7 +2953,7 @@ impl Processor {
     fn process_create_community_token(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
-        token_mint: Pubkey,
+        token_mint: Pubkey,                                                             // TODO Нужно ли проверять, что это Минт?. Нужно ли проверять его овнера и тд
         lamports: u64,
         space: u64
     ) -> ProgramResult {
@@ -2961,6 +2961,7 @@ impl Processor {
         let stake_pool_info = next_account_info(account_info_iter)?;
         let manager_info = next_account_info(account_info_iter)?;
         let community_token_dto_info = next_account_info(account_info_iter)?;
+        let dao_state_dto_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
@@ -2973,12 +2974,19 @@ impl Processor {
         stake_pool.check_manager(manager_info)?;
 
         let (community_token_pubkey, bump_seed) = CommunityToken::find_address(program_id, stake_pool_info.key);
-        if *community_token_dto_info.key != community_token_pubkey {
+        if *community_token_dto_info.key != community_token_pubkey
+            || *dao_state_dto_info.key != DaoState::find_address(program_id, stake_pool_info.key).0 {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
+        
+        if dao_state_dto_info.data_is_empty() {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let mut dao_state = try_from_slice_unchecked::<DaoState>(&dao_state_dto_info.data.borrow())?;
 
         invoke_signed(
-            &system_instruction::create_account(
+            &system_instruction::create_account(                                                    // TODO Проверять, есть ли уже такой аккаунт
                 manager_info.key,
                 community_token_dto_info.key,
                 lamports,
@@ -3004,67 +3012,107 @@ impl Processor {
         }
         .serialize(&mut *community_token_dto_info.data.borrow_mut())?;
 
+        dao_state.is_enabled = true;
+        dao_state.serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
+
         Ok(())
     }
 
-        /// Processes [CreateDaoState](enum.Instruction.html).
-        #[inline(never)] // needed to avoid stack size violation
-        fn process_create_dao_state(
-            program_id: &Pubkey,
-            accounts: &[AccountInfo],
-            is_enabled: bool,
-            lamports: u64,
-            space: u64
-        ) -> ProgramResult {
-            let account_info_iter = &mut accounts.iter();
-            let stake_pool_info = next_account_info(account_info_iter)?;
-            let manager_info = next_account_info(account_info_iter)?;
-            let dao_state_dto_info = next_account_info(account_info_iter)?;
-    
-            check_account_owner(stake_pool_info, program_id)?;
-            let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
-            if !stake_pool.is_valid() {
-                return Err(StakePoolError::InvalidState.into());
-            }
-            if stake_pool.last_update_epoch < Clock::get()?.epoch {
-                return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
-            }
-            stake_pool.check_manager(manager_info)?;
-    
-            let (dao_state_pubkey, bump_seed) = DaoState::find_address(program_id, stake_pool_info.key);
-            if *dao_state_dto_info.key != dao_state_pubkey {
-                return Err(StakePoolError::InvalidPdaAddress.into());
-            }
-    
-            invoke_signed(
-                &system_instruction::create_account(
-                    manager_info.key,
-                    dao_state_dto_info.key,
-                    lamports,
-                    space,
-                    program_id,
-                ),
-                &[
-                    manager_info.clone(),
-                    dao_state_dto_info.clone()
-                ],
-                &[
-                    &[
-                        DaoState::get_seed_prefix(),
-                        &stake_pool_info.key.to_bytes()[..],
-                        &program_id.to_bytes()[..],
-                        &[bump_seed],
-                    ]
-                ]
-            )?;
-    
-            DaoState {
-                is_enabled
-            }
-            .serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
-    
-            Ok(())
+    /// Processes [ChangeCommunityToken](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_change_community_token(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        token_mint: Pubkey,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let community_token_dto_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
         }
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        
+        if community_token_dto_info.data_is_empty() {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let mut community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+        community_token.token_mint = token_mint;
+        community_token.serialize(&mut *community_token_dto_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// Processes [CreateDaoState](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_create_dao_state(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        is_enabled: bool,
+        lamports: u64,
+        space: u64
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let dao_state_dto_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        let (dao_state_pubkey, bump_seed) = DaoState::find_address(program_id, stake_pool_info.key);
+        if *dao_state_dto_info.key != dao_state_pubkey {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        invoke_signed(
+            &system_instruction::create_account(
+                manager_info.key,
+                dao_state_dto_info.key,
+                lamports,
+                space,
+                program_id,
+            ),
+            &[
+                manager_info.clone(),
+                dao_state_dto_info.clone()
+            ],
+            &[
+                &[
+                    DaoState::get_seed_prefix(),
+                    &stake_pool_info.key.to_bytes()[..],
+                    &program_id.to_bytes()[..],
+                    &[bump_seed],
+                ]
+            ]
+        )?;
+
+        DaoState {
+            is_enabled
+        }
+        .serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
+
+        Ok(())
+    }
 
     /// Processes [Instruction](enum.Instruction.html).
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
@@ -3202,6 +3250,12 @@ impl Processor {
                 msg!("Instruction: CreateCommunityToken");
                 Self::process_create_community_token(program_id, accounts, token_mint, lamports, space)
             }
+            StakePoolInstruction::ChangeCommunityToken {
+                token_mint,
+            } => {
+                msg!("Instruction: ChangeCommunityToken");
+                Self::process_change_community_token(program_id, accounts, token_mint)
+            }
             StakePoolInstruction::CreateDaoState {
                 is_enabled,
                 lamports,
@@ -3262,6 +3316,7 @@ impl PrintProgramError for StakePoolError {
             StakePoolError::LiquiditySolWithdrawalTooLargeAtTime => msg!("Error: Too much liquidity SOL withdrawn from the stake pool's reserve account, stake pool's reserve account does not have such liquidity at time"),
             StakePoolError::SolLessThanLiquiditySol => msg!("Error: The number of sol on the stake pool's reserve account is less than the number of liquidity sol"),
             StakePoolError::InvalidPdaAddress => msg!("Error: The PDA address provided doesn't match the PDA generated by the program."),
+            StakePoolError::DataDoesNotExist => msg!("Error: Data does not exist in account, but should exists."),
         }
     }
 }

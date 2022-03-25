@@ -416,6 +416,12 @@ pub enum StakePoolInstruction {
         space: u64,
     },
 
+    ///   Change DAO`s Community token`s mint
+    ChangeCommunityToken {
+        ///   Community token`s mint adress
+        token_mint: Pubkey,
+    },
+
     ///   Create DAO`s Community token`s mint
     CreateDaoState {
         /// Is DAO enabled for StakePool
@@ -1458,8 +1464,38 @@ pub fn create_community_token(
     manager: &Pubkey,
     community_token_dto: &Pubkey,
     token_mint: &Pubkey,
-    lamports: u64,
-    space: u64
+    community_token_lamports: u64,
+    community_token_space: u64,
+    dao_state_dto: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*community_token_dto, false),
+        AccountMeta::new(*dao_state_dto, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::CreateCommunityToken {
+            token_mint: *token_mint,
+            lamports: community_token_lamports,
+            space: community_token_space
+        }
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instruction required to change DAO`s Community token`s mint.
+pub fn change_community_token(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    community_token_dto: &Pubkey,
+    token_mint: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
@@ -1471,10 +1507,8 @@ pub fn create_community_token(
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::CreateCommunityToken {
+        data: StakePoolInstruction::ChangeCommunityToken {
             token_mint: *token_mint,
-            lamports,
-            space
         }
             .try_to_vec()
             .unwrap(),
@@ -1488,8 +1522,8 @@ pub fn create_dao_state(
     manager: &Pubkey,
     dao_state_dto: &Pubkey,
     is_enabled: bool,
-    lamports: u64,
-    space: u64
+    dao_state_lamports: u64,
+    dao_state_space: u64
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
@@ -1503,8 +1537,8 @@ pub fn create_dao_state(
         accounts,
         data: StakePoolInstruction::CreateDaoState { 
             is_enabled,
-            lamports,
-            space
+            lamports: dao_state_lamports,
+            space: dao_state_space
         }
             .try_to_vec()
             .unwrap(),

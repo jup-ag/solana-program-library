@@ -21,7 +21,7 @@ use {
     solana_cli_output::OutputFormat,
     solana_client::rpc_client::RpcClient,
     solana_program::{
-        borsh::{get_instance_packed_len, get_packed_len},
+        borsh::{get_instance_packed_len, get_packed_len, try_from_slice_unchecked},
         instruction::Instruction,
         program_pack::Pack,
         pubkey::Pubkey,
@@ -537,10 +537,8 @@ fn command_create_pool(
     ];
 
     let mut community_mint_keypair: Option<Keypair> = None;
-    let mut is_dao_enabled = false;
+    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0;
     if with_community_token {
-        is_dao_enabled = true;
-
         let community_token_dto_length = get_packed_len::<CommunityToken>();
         let rent_exemption_for_community_token_dto_account = config
         .rpc_client
@@ -571,6 +569,17 @@ fn command_create_pool(
         setup_signers.push(community_mint_keypair.as_ref().unwrap());
         
         initialize_instructions.push(
+            spl_stake_pool::instruction::create_dao_state(
+                &spl_stake_pool::id(),
+                &stake_pool_keypair.pubkey(),
+                &config.manager.pubkey(),
+                &dao_state_dto_pubkey,
+                true,
+                rent_exemption_for_dao_state_dto_account,
+                dao_state_dto_length as u64
+            )
+        );
+        initialize_instructions.push(
             spl_stake_pool::instruction::create_community_token(
                 &spl_stake_pool::id(),
                 &stake_pool_keypair.pubkey(),
@@ -578,21 +587,23 @@ fn command_create_pool(
                 &CommunityToken::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0,
                 &community_mint_keypair.as_ref().unwrap().pubkey(),
                 rent_exemption_for_community_token_dto_account,
-                community_token_dto_length as u64
+                community_token_dto_length as u64,
+                &dao_state_dto_pubkey,
+            )
+        );
+    } else {
+        initialize_instructions.push(
+            spl_stake_pool::instruction::create_dao_state(
+                &spl_stake_pool::id(),
+                &stake_pool_keypair.pubkey(),
+                &config.manager.pubkey(),
+                &dao_state_dto_pubkey,
+                false,
+                rent_exemption_for_dao_state_dto_account,
+                dao_state_dto_length as u64
             )
         );
     }
-    initialize_instructions.push(
-        spl_stake_pool::instruction::create_dao_state(
-            &spl_stake_pool::id(),
-            &stake_pool_keypair.pubkey(),
-            &config.manager.pubkey(),
-            &DaoState::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0,
-            is_dao_enabled,
-            rent_exemption_for_dao_state_dto_account,
-            dao_state_dto_length as u64
-        )
-    );
 
     let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
     let setup_message = Message::new_with_blockhash(
@@ -2545,15 +2556,12 @@ fn command_check_existing_validators() -> CommandResult {
     Ok(())
 }
 
-fn command_create_community_token(        // Форс рекриэйт Токена.  Изначально проверка на существование аккаунтов // TODO TODO TODO  ВОт тут только изменять состоянияе!!!!!!!!!!
+// TOOD заменить на command_create_community_token()
+fn command_DELETEXXX_create_community_token(
     config: &Config,
     stake_pool_address: &Pubkey,
     from: &Option<Keypair>,
 ) -> CommandResult {
-    if !config.no_update {
-        command_update(config, stake_pool_address, false, false)?;
-    }
-
     let decimals = spl_token::native_mint::DECIMALS;
 
     let community_mint_keypair = Keypair::new();
@@ -2572,6 +2580,8 @@ fn command_create_community_token(        // Форс рекриэйт Токе�
     let rent_exemption_for_dao_state_dto_account = config
     .rpc_client
     .get_minimum_balance_for_rent_exemption(dao_state_dto_length)?;
+
+    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
 
     let mut instructions = vec![
         system_instruction::create_account(
@@ -2595,7 +2605,7 @@ fn command_create_community_token(        // Форс рекриэйт Токе�
             &spl_stake_pool::id(),
             stake_pool_address,
             &config.manager.pubkey(),
-            &DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0,
+            &dao_state_dto_pubkey,
             true,
             rent_exemption_for_dao_state_dto_account,
             dao_state_dto_length as u64
@@ -2607,7 +2617,8 @@ fn command_create_community_token(        // Форс рекриэйт Токе�
             &CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0,
             &community_mint_keypair.pubkey(),
             rent_exemption_for_community_token_dto_account,
-            community_token_dto_length as u64
+            community_token_dto_length as u64,
+            &dao_state_dto_pubkey
         )
     ];
 
@@ -2621,6 +2632,117 @@ fn command_create_community_token(        // Форс рекриэйт Токе�
     let total_consumption = rent_exemption_for_token_mint_account 
         + rent_exemption_for_community_token_dto_account 
         + rent_exemption_for_dao_state_dto_account
+        + config.rpc_client.get_fee_for_message(&message)?;
+    check_fee_payer_balance(
+        config,
+        total_consumption
+    )?;
+
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        &community_mint_keypair,
+        config.manager.as_ref(),
+    ];
+    unique_signers!(signers);
+
+    send_transaction(config, Transaction::new(&signers, message, recent_blockhash))?;
+
+    Ok(())
+}
+
+fn command_create_community_token(        // Форс рекриэйт Токена.  Изначально проверка на существование аккаунтов // TODO TODO TODO  ВОт тут только изменять состоянияе!!!!!!!!!!
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    from: &Option<Keypair>,
+    force_recreate: bool,
+) -> CommandResult {
+    let community_token_dto_pubkey = CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+
+    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let dao_state_dto_account = config
+        .rpc_client
+        .get_account(&dao_state_dto_pubkey)?;
+
+    if dao_state_dto_account.data.len() == 0 {
+        return Err("Logic error: data does not exist for DaoState".into());
+    }
+    let dao_state = try_from_slice_unchecked::<DaoState>(dao_state_dto_account.data.as_slice())?;
+
+
+
+
+
+    
+                                                                                                //  // // // // // // // TODO вот ФОРСРЕкриэйт на новое 
+    if dao_state.is_enabled {
+        let community_token_dto_account = config
+            .rpc_client
+            .get_account(&community_token_dto_pubkey)?;
+        
+        if community_token_dto_account.data.len() == 0 {
+            return Err("Logic error: data does not exist for CommunityToken".into());
+        }
+        let community_token = try_from_slice_unchecked::<CommunityToken>(community_token_dto_account.data.as_slice())?;
+
+        return Err(format!(
+            "Dao is already created with community token`s mint: {}. Use '--force' flag for recreating community token`s mint",
+            community_token.token_mint
+        ).into());
+    }
+
+    let decimals = spl_token::native_mint::DECIMALS;
+
+    let community_mint_keypair = Keypair::new();
+    println!("Creating community mint {}", community_mint_keypair.pubkey());
+
+    let rent_exemption_for_token_mint_account = config
+    .rpc_client
+    .get_minimum_balance_for_rent_exemption(spl_token::state::Mint::LEN)?;
+
+    let community_token_dto_length = get_packed_len::<CommunityToken>();
+    let rent_exemption_for_community_token_dto_account = config
+    .rpc_client
+    .get_minimum_balance_for_rent_exemption(community_token_dto_length)?;
+
+    let mut instructions = vec![                                                    // Есть ли смысл удалять аккаунт Минта старый при форcе?
+        system_instruction::create_account(
+            &config.fee_payer.pubkey(),
+            &community_mint_keypair.pubkey(),
+            rent_exemption_for_token_mint_account,
+            spl_token::state::Mint::LEN as u64,
+            &spl_token::id(),
+        ),
+        spl_token::instruction::initialize_mint(
+            &spl_token::id(),
+            &community_mint_keypair.pubkey(),
+            &find_withdraw_authority_program_address(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+            ).0,
+            None,
+            decimals,
+        )?,
+        spl_stake_pool::instruction::create_community_token(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &config.manager.pubkey(),
+            &community_token_dto_pubkey,
+            &community_mint_keypair.pubkey(),
+            rent_exemption_for_community_token_dto_account,
+            community_token_dto_length as u64,
+            &dao_state_dto_pubkey
+        )
+    ];
+
+    let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+    let message = Message::new_with_blockhash(
+        &instructions,
+        Some(&config.fee_payer.pubkey()),
+        &recent_blockhash,
+    );
+
+    let total_consumption = rent_exemption_for_token_mint_account 
+        + rent_exemption_for_community_token_dto_account 
         + config.rpc_client.get_fee_for_message(&message)?;
     check_fee_payer_balance(
         config,
@@ -3629,6 +3751,13 @@ fn main() {
                 .takes_value(true)
                 .help("Source account of funds. [default: cli config keypair]"),
         )
+        .arg(
+            Arg::with_name("force")
+                .long("force")
+                .takes_value(false)
+                .help("Recreate community token`s mint"),
+
+        )
     )
         .get_matches();
 
@@ -4054,7 +4183,9 @@ fn main() {
         ("create-community-token", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             let from = keypair_of(arg_matches, "from");
-            command_create_community_token(&config, &stake_pool_address, &from)
+            let force = arg_matches.is_present("force");
+            command_DELETEXXX_create_community_token(&config, &stake_pool_address, &from)
+            // command_create_community_token(&config, &stake_pool_address, &from, force)
         }
         _ => unreachable!(),
     }
