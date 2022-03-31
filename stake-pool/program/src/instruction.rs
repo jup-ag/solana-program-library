@@ -405,33 +405,135 @@ pub enum StakePoolInstruction {
     ///   8. `[s]` (Optional) Stake pool sol withdraw authority
     WithdrawLiquiditySol(u64),
 
-    ///   Create DAO`s Community token`s mint
+    ///   Create account for storing DAO`s Community token`s mint
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Account storing community token dto
+    ///   3. `[w]` Account storing dao state dto
+    ///   4  `[]` System program account
     CreateCommunityToken {
         ///   Community token`s mint adress
+        #[allow(dead_code)] // but it's not
         token_mint: Pubkey,
         /// Number of lamports to transfer to the new account
+        #[allow(dead_code)] // but it's not
         lamports: u64,
-
         /// Number of bytes of memory to allocate
+        #[allow(dead_code)] // but it's not
         space: u64,
     },
 
-    ///   Change DAO`s Community token`s mint
-    ChangeCommunityToken {
-        ///   Community token`s mint adress
-        token_mint: Pubkey,
-    },
-
-    ///   Create DAO`s Community token`s mint
+    ///   Create account for storing DAO`s state
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   3. `[w]` Account storing dao state dto
+    ///   4  `[]` System program account
     CreateDaoState {
         /// Is DAO enabled for StakePool
+        #[allow(dead_code)] // but it's not
         is_enabled: bool,
         /// Number of lamports to transfer to the new account
+        #[allow(dead_code)] // but it's not
         lamports: u64,
-
         /// Number of bytes of memory to allocate
+        #[allow(dead_code)] // but it's not
         space: u64,
     },
+
+    ///   Create account for storing information for DAO`s community tokens destribution strategy
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Owner wallet
+    ///   2. `[w]` Account storing community token staking rewards dto
+    ///   4  `[]` System program account
+    CreateCommunityTokenStakingRewards {
+        /// Number of lamports to transfer to the new account
+        #[allow(dead_code)] // but it's not
+        lamports: u64,
+        /// Number of bytes of memory to allocate
+        #[allow(dead_code)] // but it's not
+        space: u64,
+    },
+
+    ///   Deposit SOL directly into the pool's reserve account with existing DAO`s community tokens strategy. The output is a "pool" token
+    ///   representing ownership into the pool. Inputs are converted to the current ratio.
+    ///
+    ///   0. `[w]` Stake pool
+    ///   1. `[]` Stake pool withdraw authority
+    ///   2. `[w]` Reserve stake account, to deposit SOL
+    ///   3. `[s]` Account providing the lamports to be deposited into the pool
+    ///   4. `[w]` User account to receive pool tokens
+    ///   5  `[]` User account to hold DAO`s community tokens
+    ///   6. `[w]` Account to receive fee tokens
+    ///   7. `[w]` Account to receive a portion of fee as referral fees
+    ///   8. `[w]` Pool token mint account
+    ///   9. `[]` System program account
+    ///  10. `[]` Token program id
+    ///  11. `[w]` Account for storing community token staking rewards dto
+    ///  12. `[s]` Owner wallet
+    ///  13  `[]` Account for storing community token dto
+    ///  14. `[s]` (Optional) Stake pool sol deposit authority.
+    DaoStrategyDepositSol(u64),
+
+    ///   Withdraw SOL directly from the pool's reserve account with existing DAO`s community tokens strategy. Fails if the
+    ///   reserve does not have enough SOL.
+    ///
+    ///   0. `[w]` Stake pool
+    ///   1. `[]` Stake pool withdraw authority
+    ///   2. `[s]` User transfer authority, for pool token account
+    ///   3. `[w]` User account to burn pool tokens
+    ///   4  `[]` User account to hold DAO`s community tokens
+    ///   5. `[w]` Reserve stake account, to withdraw SOL
+    ///   6. `[w]` Account receiving the lamports from the reserve, must be a system account
+    ///   7. `[w]` Account to receive pool fee tokens
+    ///   8. `[w]` Pool token mint account
+    ///   9. '[]' Clock sysvar
+    ///  10. '[]' Stake history sysvar
+    ///  11. `[]` Stake program account
+    ///  12. `[]` Token program id
+    ///  13. `[w]` Account for storing community token staking rewards dto
+    ///  14. `[s]` Owner wallet 
+    ///  15. `[]` Account for storing community token
+    ///  16. `[s]` (Optional) Stake pool sol withdraw authority
+    DaoStrategyWithdrawSol(u64),
+
+    ///   Withdraw the token from the pool at the current ratio  with existing DAO`s community tokens strategy.
+    ///
+    ///   Succeeds if the stake account has enough SOL to cover the desired amount
+    ///   of pool tokens, and if the withdrawal keeps the total staked amount
+    ///   above the minimum of rent-exempt amount + 0.001 SOL.
+    ///
+    ///   When allowing withdrawals, the order of priority goes:
+    ///
+    ///   * preferred withdraw validator stake account (if set)
+    ///   * validator stake accounts
+    ///   * transient stake accounts
+    ///   * reserve stake account
+    ///
+    ///   A user can freely withdraw from a validator stake account, and if they
+    ///   are all at the minimum, then they can withdraw from transient stake
+    ///   accounts, and if they are all at minimum, then they can withdraw from
+    ///   the reserve.
+    ///
+    ///   0. `[w]` Stake pool
+    ///   1. `[w]` Validator stake list storage account
+    ///   2. `[]` Stake pool withdraw authority
+    ///   3. `[w]` Validator or reserve stake account to split
+    ///   4. `[w]` Unitialized stake account to receive withdrawal
+    ///   5. `[]` User account to set as a new withdraw authority
+    ///   6. `[s]` User transfer authority, for pool token account
+    ///   7. `[w]` User account with pool tokens to burn from
+    ///   8. `[w]` Account to receive pool fee tokens
+    ///   9. `[w]` Pool token mint account
+    ///  10. `[]` Sysvar clock account (required)
+    ///  11. `[]` Pool token program id
+    ///  12. `[]` Stake program id,
+    ///  13  `[]` User account to hold DAO`s community tokens
+    ///  14  `[w]` Account for storing community token staking rewards dto
+    ///  15. `[s]` Owner wallet
+    ///  16  `[]` Account for storing community token dto
+    /// 
+    ///  userdata: amount of pool tokens to withdraw
+    DaoStrategyWithdrawStake(u64),
 }
 
 /// Creates an 'initialize' instruction.
@@ -1457,7 +1559,7 @@ pub fn withdraw_liquidity_sol_with_authority(
     }
 }
 
-/// Creates instruction required to create DAO`s Community token`s mint.
+/// Creates instruction required to create account for storing DAO`s Community token`s mint.
 pub fn create_community_token(
     program_id: &Pubkey,
     stake_pool: &Pubkey,
@@ -1489,33 +1591,7 @@ pub fn create_community_token(
     }
 }
 
-/// Creates instruction required to change DAO`s Community token`s mint.
-pub fn change_community_token(
-    program_id: &Pubkey,
-    stake_pool: &Pubkey,
-    manager: &Pubkey,
-    community_token_dto: &Pubkey,
-    token_mint: &Pubkey,
-) -> Instruction {
-    let accounts = vec![
-        AccountMeta::new_readonly(*stake_pool, false),
-        AccountMeta::new_readonly(*manager, true),
-        AccountMeta::new(*community_token_dto, false),
-        AccountMeta::new_readonly(system_program::ID, false),
-    ]; 
-
-    Instruction {
-        program_id: *program_id,
-        accounts,
-        data: StakePoolInstruction::ChangeCommunityToken {
-            token_mint: *token_mint,
-        }
-            .try_to_vec()
-            .unwrap(),
-    }
-}
-
-/// Creates instruction required to create DAO`s state
+/// Creates instruction required to create account for storing DAO`s state
 pub fn create_dao_state(
     program_id: &Pubkey,
     stake_pool: &Pubkey,
@@ -1540,6 +1616,267 @@ pub fn create_dao_state(
             lamports: dao_state_lamports,
             space: dao_state_space
         }
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instruction required to create account for storing information for DAO`s community tokens destribution strategy
+pub fn create_community_token_staking_rewards(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    community_token_staking_rewards_lamports: u64,
+    community_token_staking_rewards_space: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+    
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::CreateCommunityTokenStakingRewards {
+            lamports: community_token_staking_rewards_lamports,
+            space: community_token_staking_rewards_space
+        }
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+
+/// Creates instructions required to deposit SOL directly into a stake pool with existing DAO`s community tokens strategy.
+pub fn dao_strategy_deposit_sol(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    lamports_from: &Pubkey,
+    pool_tokens_to: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    manager_fee_account: &Pubkey,
+    referrer_pool_tokens_account: &Pubkey,
+    pool_mint: &Pubkey,
+    token_program_id: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_dto_pubkey: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*lamports_from, true),
+        AccountMeta::new(*pool_tokens_to, false),
+        AccountMeta::new_readonly(*dao_community_tokens_to, false),
+        AccountMeta::new(*manager_fee_account, false),
+        AccountMeta::new(*referrer_pool_tokens_account, false),
+        AccountMeta::new(*pool_mint, false),
+        AccountMeta::new_readonly(system_program::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::DaoStrategyDepositSol(amount)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instructions required to deposit SOL directly into a stake pool with existing DAO`s community tokens strategy.
+/// The difference with `deposit_sol()` is that a deposit
+/// authority must sign this instruction.
+pub fn dao_strategy_deposit_sol_with_authority(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    sol_deposit_authority: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    lamports_from: &Pubkey,
+    pool_tokens_to: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    manager_fee_account: &Pubkey,
+    referrer_pool_tokens_account: &Pubkey,
+    pool_mint: &Pubkey,
+    token_program_id: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_dto_pubkey: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*lamports_from, true),
+        AccountMeta::new(*pool_tokens_to, false),
+        AccountMeta::new_readonly(*dao_community_tokens_to, false),
+        AccountMeta::new(*manager_fee_account, false),
+        AccountMeta::new(*referrer_pool_tokens_account, false),
+        AccountMeta::new(*pool_mint, false),
+        AccountMeta::new_readonly(system_program::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+        AccountMeta::new_readonly(*sol_deposit_authority, true),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::DaoStrategyDepositSol(amount)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instruction required to withdraw SOL directly from a stake pool with existing DAO`s community tokens strategy.
+pub fn dao_strategy_withdraw_sol(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    user_transfer_authority: &Pubkey,
+    pool_tokens_from: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    lamports_to: &Pubkey,
+    manager_fee_account: &Pubkey,
+    pool_mint: &Pubkey,
+    token_program_id: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_dto_pubkey: &Pubkey,
+    pool_tokens: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new_readonly(*user_transfer_authority, true),
+        AccountMeta::new(*pool_tokens_from, false),
+        AccountMeta::new_readonly(*dao_community_tokens_to, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*lamports_to, false),
+        AccountMeta::new(*manager_fee_account, false),
+        AccountMeta::new(*pool_mint, false),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
+        AccountMeta::new_readonly(sysvar::stake_history::id(), false),
+        AccountMeta::new_readonly(stake::program::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction:: DaoStrategyWithdrawSol(pool_tokens)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instruction required to withdraw SOL directly from a stake pool with existing DAO`s community tokens strategy.
+/// The difference with `withdraw_sol()` is that the sol withdraw authority
+/// must sign this instruction.
+pub fn dao_strategy_withdraw_sol_with_authority(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    sol_withdraw_authority: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    user_transfer_authority: &Pubkey,
+    pool_tokens_from: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    lamports_to: &Pubkey,
+    manager_fee_account: &Pubkey,
+    pool_mint: &Pubkey,
+    token_program_id: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_dto_pubkey: &Pubkey,
+    pool_tokens: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new_readonly(*user_transfer_authority, true),
+        AccountMeta::new(*pool_tokens_from, false),
+        AccountMeta::new_readonly(*dao_community_tokens_to, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*lamports_to, false),
+        AccountMeta::new(*manager_fee_account, false),
+        AccountMeta::new(*pool_mint, false),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
+        AccountMeta::new_readonly(sysvar::stake_history::id(), false),
+        AccountMeta::new_readonly(stake::program::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+        AccountMeta::new_readonly(*sol_withdraw_authority, true),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::DaoStrategyWithdrawSol(pool_tokens)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates a 'WithdrawStake' instruction.
+pub fn dao_strategy_withdraw_stake(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    validator_list_storage: &Pubkey,
+    stake_pool_withdraw: &Pubkey,
+    stake_to_split: &Pubkey,
+    stake_to_receive: &Pubkey,
+    user_stake_authority: &Pubkey,
+    user_transfer_authority: &Pubkey,
+    user_pool_token_account: &Pubkey,
+    manager_fee_account: &Pubkey,
+    pool_mint: &Pubkey,
+    token_program_id: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_dto_pubkey: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new(*validator_list_storage, false),
+        AccountMeta::new_readonly(*stake_pool_withdraw, false),
+        AccountMeta::new(*stake_to_split, false),
+        AccountMeta::new(*stake_to_receive, false),
+        AccountMeta::new_readonly(*user_stake_authority, false),
+        AccountMeta::new_readonly(*user_transfer_authority, true),
+        AccountMeta::new(*user_pool_token_account, false),
+        AccountMeta::new(*manager_fee_account, false),
+        AccountMeta::new(*pool_mint, false),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new_readonly(stake::program::id(), false),
+        AccountMeta::new_readonly(*dao_community_tokens_to, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::DaoStrategyWithdrawStake(amount)
             .try_to_vec()
             .unwrap(),
     }

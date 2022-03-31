@@ -144,9 +144,12 @@ pub enum StakePoolError {
     InvalidPdaAddress,
 
     // 40.
-    /// Data does not exist in account, but should exists
+    /// Data does not exist in account, but should exists. It is mean account does not exist
     #[error("DataDoesNotExist")]
     DataDoesNotExist,
+    /// Data exists in account, but should not exists. It is mean account exist
+    #[error("DataAlreasyExists")]
+    DataAlreadyExists,
 }
 impl From<StakePoolError> for ProgramError {
     fn from(e: StakePoolError) -> Self {

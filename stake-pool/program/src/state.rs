@@ -877,7 +877,7 @@ pub trait SimplePda {
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct CommunityToken {
-    /// Token`s mint address
+    /// DAO`s community token`s mint address
     pub token_mint: Pubkey
 }
 impl CommunityToken {
@@ -904,6 +904,52 @@ impl DaoState {
 impl SimplePda for DaoState {
     fn get_seed_prefix() -> &'static [u8] {
         return Self::SEED_PREFIX;
+    }
+}
+
+/// Account type. Needed to find from the network. Quantity of variants must be less than or equal 256. (1 byte)
+#[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub enum PdaAccountType {
+    /// If the account has not been initialized, the enum will be 0
+    Uninitialized,
+    /// Account for CommunityTokenStakingRewards dto
+    CommunityTokenStakingRewards
+}
+
+/// Initialized information for payment the reward`s in DAO tokens
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct CommunityTokenStakingRewards {
+    /// Account type. Needed to find from the network
+    pub pda_account_type: PdaAccountType,
+    /// Programm id. Needed to find from the network
+    pub program_id: Pubkey,
+    /// Stakr pool address. Needed to find from the network
+    pub stake_pool_address: Pubkey,
+    /// Owner wallet
+    pub owner_wallet: Pubkey,
+    /// The epoch in wich a person staked or changed the stake
+    pub initial_staking_epoch: u64,
+}
+
+impl CommunityTokenStakingRewards {
+    /// Seed prefix for PDA
+    pub const SEED_PREFIX: &'static [u8] = b"community_token_staking_rewards";
+    /// Find PDA 
+    pub fn find_address(
+        program_id: &Pubkey,
+        stake_pool_address: &Pubkey,
+        owner_wallet: &Pubkey,
+    ) -> (Pubkey, u8) {
+        Pubkey::find_program_address(
+            &[
+                Self::SEED_PREFIX,
+                &stake_pool_address.to_bytes()[..],
+                &owner_wallet.to_bytes()[..],
+                &program_id.to_bytes()[..]
+            ],
+            program_id
+        )
     }
 }
 

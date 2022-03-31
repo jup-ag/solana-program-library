@@ -8,7 +8,7 @@ use {
         minimum_reserve_lamports, minimum_stake_lamports,
         state::{
             AccountType, Fee, FeeType, RateOfExchange, StakePool, StakeStatus, ValidatorList,
-            ValidatorListHeader, ValidatorStakeInfo, SimplePda, CommunityToken, DaoState
+            ValidatorListHeader, ValidatorStakeInfo, SimplePda, CommunityToken, DaoState, CommunityTokenStakingRewards, PdaAccountType
         },
         AUTHORITY_DEPOSIT, AUTHORITY_WITHDRAW, MINIMUM_ACTIVE_STAKE, TRANSIENT_STAKE_SEED_PREFIX,
     },
@@ -33,6 +33,7 @@ use {
         sysvar::Sysvar,
     },
     spl_token::state::Mint,
+    spl_associated_token_account::get_associated_token_address,
 };
 
 /// Minimum deposit
@@ -2953,7 +2954,7 @@ impl Processor {
     fn process_create_community_token(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
-        token_mint: Pubkey,                                                             // TODO Нужно ли проверять, что это Минт?. Нужно ли проверять его овнера и тд
+        token_mint: Pubkey,
         lamports: u64,
         space: u64
     ) -> ProgramResult {
@@ -2978,15 +2979,22 @@ impl Processor {
             || *dao_state_dto_info.key != DaoState::find_address(program_id, stake_pool_info.key).0 {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
+        if !community_token_dto_info.data_is_empty() 
+            || community_token_dto_info.lamports() != 0 {
+            return Err(StakePoolError::DataAlreadyExists.into());
+        }
         
-        if dao_state_dto_info.data_is_empty() {
+        if dao_state_dto_info.data_is_empty() 
+            || dao_state_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
         let mut dao_state = try_from_slice_unchecked::<DaoState>(&dao_state_dto_info.data.borrow())?;
+        dao_state.is_enabled = true;
+        dao_state.serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
 
         invoke_signed(
-            &system_instruction::create_account(                                                    // TODO Проверять, есть ли уже такой аккаунт
+            &system_instruction::create_account(
                 manager_info.key,
                 community_token_dto_info.key,
                 lamports,
@@ -3011,46 +3019,6 @@ impl Processor {
             token_mint
         }
         .serialize(&mut *community_token_dto_info.data.borrow_mut())?;
-
-        dao_state.is_enabled = true;
-        dao_state.serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
-
-        Ok(())
-    }
-
-    /// Processes [ChangeCommunityToken](enum.Instruction.html).
-    #[inline(never)] // needed to avoid stack size violation
-    fn process_change_community_token(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        token_mint: Pubkey,
-    ) -> ProgramResult {
-        let account_info_iter = &mut accounts.iter();
-        let stake_pool_info = next_account_info(account_info_iter)?;
-        let manager_info = next_account_info(account_info_iter)?;
-        let community_token_dto_info = next_account_info(account_info_iter)?;
-
-        check_account_owner(stake_pool_info, program_id)?;
-        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
-        if !stake_pool.is_valid() {
-            return Err(StakePoolError::InvalidState.into());
-        }
-        if stake_pool.last_update_epoch < Clock::get()?.epoch {
-            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
-        }
-        stake_pool.check_manager(manager_info)?;
-
-        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
-            return Err(StakePoolError::InvalidPdaAddress.into());
-        }
-        
-        if community_token_dto_info.data_is_empty() {
-            return Err(StakePoolError::DataDoesNotExist.into());
-        }
-
-        let mut community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
-        community_token.token_mint = token_mint;
-        community_token.serialize(&mut *community_token_dto_info.data.borrow_mut())?;
 
         Ok(())
     }
@@ -3083,6 +3051,10 @@ impl Processor {
         if *dao_state_dto_info.key != dao_state_pubkey {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
+        if !dao_state_dto_info.data_is_empty() 
+            || dao_state_dto_info.lamports() != 0 {
+            return Err(StakePoolError::DataAlreadyExists.into());
+        }
 
         invoke_signed(
             &system_instruction::create_account(
@@ -3110,6 +3082,728 @@ impl Processor {
             is_enabled
         }
         .serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// Processes [CreateCommunityTokenStakingRewards](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_create_community_token_staking_rewards(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        lamports: u64,
+        space: u64
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let owner_wallet_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        let epoch = Clock::get()?.epoch;
+
+        if stake_pool.last_update_epoch < epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        if !owner_wallet_info.is_signer {
+            return Err(StakePoolError::SignatureMissing.into());
+        }
+        let (community_token_staking_rewards_pubkey, bump_seed) = CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key);
+        if *community_token_staking_rewards_dto_info.key != community_token_staking_rewards_pubkey {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if !community_token_staking_rewards_dto_info.data_is_empty() 
+            || community_token_staking_rewards_dto_info.lamports() != 0 {
+            return Err(StakePoolError::DataAlreadyExists.into());
+        }
+        
+        invoke_signed(
+            &system_instruction::create_account(
+                owner_wallet_info.key,
+                community_token_staking_rewards_dto_info.key,
+                lamports,
+                space,
+                program_id,
+            ),
+            &[
+                owner_wallet_info.clone(),
+                community_token_staking_rewards_dto_info.clone()
+            ],
+            &[
+                &[
+                    CommunityTokenStakingRewards::SEED_PREFIX,
+                    &stake_pool_info.key.to_bytes()[..],
+                    &owner_wallet_info.key.to_bytes()[..],
+                    &program_id.to_bytes()[..],
+                    &[bump_seed],
+                ]
+            ]
+        )?;
+
+        CommunityTokenStakingRewards {
+            pda_account_type: PdaAccountType::CommunityTokenStakingRewards,
+            program_id: program_id.clone(),
+            stake_pool_address: stake_pool_info.key.clone(),
+            owner_wallet: owner_wallet_info.key.clone(),
+            initial_staking_epoch: epoch
+        }
+        .serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// Processes [DaoStrategyDepositSol](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_dao_strategy_deposit_sol(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        deposit_lamports: u64,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let reserve_stake_account_info = next_account_info(account_info_iter)?;
+        let from_user_lamports_info = next_account_info(account_info_iter)?;
+        let dest_user_pool_info = next_account_info(account_info_iter)?;
+        let dao_community_tokens_to_info = next_account_info(account_info_iter)?;
+        let manager_fee_info = next_account_info(account_info_iter)?;
+        let referrer_fee_info = next_account_info(account_info_iter)?;
+        let pool_mint_info = next_account_info(account_info_iter)?;
+        let system_program_info = next_account_info(account_info_iter)?;
+        let token_program_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
+        let owner_wallet_info = next_account_info(account_info_iter)?;
+        let community_token_dto_info = next_account_info(account_info_iter)?;
+        let sol_deposit_authority_info = next_account_info(account_info_iter);
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        let epoch = Clock::get()?.epoch;
+        if stake_pool.last_update_epoch < epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+        stake_pool.check_sol_deposit_authority(sol_deposit_authority_info)?;
+        stake_pool.check_mint(pool_mint_info)?;
+        stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+
+        if stake_pool.token_program_id != *token_program_info.key {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+        check_system_program(system_program_info.key)?;
+
+        if stake_pool.manager_fee_account != *manager_fee_info.key {
+            return Err(StakePoolError::InvalidFeeAccount.into());
+        }
+
+        if !owner_wallet_info.is_signer {
+            return Err(StakePoolError::SignatureMissing.into());
+        }
+        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_staking_rewards_dto_info.data_is_empty()
+            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_dto_info.data_is_empty()
+            || community_token_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+
+        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if dao_community_tokens_to_info.data_is_empty()
+            || dao_community_tokens_to_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        if deposit_lamports < MINIMUM_DEPOSIT {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
+        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        community_token_staking_rewards.initial_staking_epoch = epoch;
+        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+
+        let new_pool_tokens = stake_pool
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        if new_pool_tokens == 0 {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
+        let pool_tokens_sol_deposit_fee = stake_pool
+            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let pool_tokens_user = new_pool_tokens
+            .checked_sub(pool_tokens_sol_deposit_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let pool_tokens_referral_fee = stake_pool
+            .calc_pool_tokens_sol_referral_fee(pool_tokens_sol_deposit_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee
+            .checked_sub(pool_tokens_referral_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        if pool_tokens_user
+            .saturating_add(pool_tokens_manager_deposit_fee)
+            .saturating_add(pool_tokens_referral_fee)
+            != new_pool_tokens
+        {
+            return Err(StakePoolError::CalculationFailure.into());
+        }
+
+        if pool_tokens_user == 0 {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
+        Self::sol_transfer(
+            from_user_lamports_info.clone(),
+            reserve_stake_account_info.clone(),
+            system_program_info.clone(),
+            deposit_lamports,
+        )?;
+
+        Self::token_mint_to(
+            stake_pool_info.key,
+            token_program_info.clone(),
+            pool_mint_info.clone(),
+            dest_user_pool_info.clone(),
+            withdraw_authority_info.clone(),
+            AUTHORITY_WITHDRAW,
+            stake_pool.stake_withdraw_bump_seed,
+            pool_tokens_user,
+        )?;
+
+        if pool_tokens_manager_deposit_fee > 0 {
+            Self::token_mint_to(
+                stake_pool_info.key,
+                token_program_info.clone(),
+                pool_mint_info.clone(),
+                manager_fee_info.clone(),
+                withdraw_authority_info.clone(),
+                AUTHORITY_WITHDRAW,
+                stake_pool.stake_withdraw_bump_seed,
+                pool_tokens_manager_deposit_fee,
+            )?;
+        }
+
+        if pool_tokens_referral_fee > 0 {
+            Self::token_mint_to(
+                stake_pool_info.key,
+                token_program_info.clone(),
+                pool_mint_info.clone(),
+                referrer_fee_info.clone(),
+                withdraw_authority_info.clone(),
+                AUTHORITY_WITHDRAW,
+                stake_pool.stake_withdraw_bump_seed,
+                pool_tokens_referral_fee,
+            )?;
+        }
+
+        stake_pool.pool_token_supply = stake_pool
+            .pool_token_supply
+            .checked_add(new_pool_tokens)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.total_lamports = stake_pool
+            .total_lamports
+            .checked_add(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// Processes [WithdrawSol](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_dao_strategy_withdraw_sol(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        pool_tokens: u64,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let user_transfer_authority_info = next_account_info(account_info_iter)?;
+        let burn_from_pool_info = next_account_info(account_info_iter)?;
+        let dao_community_tokens_to_info = next_account_info(account_info_iter)?;
+        let reserve_stake_info = next_account_info(account_info_iter)?;
+        let destination_lamports_info = next_account_info(account_info_iter)?;
+        let manager_fee_info = next_account_info(account_info_iter)?;
+        let pool_mint_info = next_account_info(account_info_iter)?;
+        let clock_info = next_account_info(account_info_iter)?;
+        let stake_history_info = next_account_info(account_info_iter)?;
+        let stake_program_info = next_account_info(account_info_iter)?;
+        let token_program_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
+        let owner_wallet_info = next_account_info(account_info_iter)?;
+        let community_token_dto_info = next_account_info(account_info_iter)?;
+        let sol_withdraw_authority_info = next_account_info(account_info_iter);
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        let epoch = Clock::get()?.epoch;
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+        stake_pool.check_sol_withdraw_authority(sol_withdraw_authority_info)?;
+        stake_pool.check_mint(pool_mint_info)?;
+        stake_pool.check_reserve_stake(reserve_stake_info)?;
+
+        if stake_pool.token_program_id != *token_program_info.key {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+        check_stake_program(stake_program_info.key)?;
+
+        if stake_pool.manager_fee_account != *manager_fee_info.key {
+            return Err(StakePoolError::InvalidFeeAccount.into());
+        }
+
+        if !owner_wallet_info.is_signer {
+            return Err(StakePoolError::SignatureMissing.into());
+        }
+        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_staking_rewards_dto_info.data_is_empty()
+            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_dto_info.data_is_empty()
+            || community_token_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+
+        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if dao_community_tokens_to_info.data_is_empty()
+            || dao_community_tokens_to_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        community_token_staking_rewards.initial_staking_epoch = epoch;
+        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+
+
+
+// TODO TODO TODO  ЕСЛИ ВСЕ токены сняты, то снять солы с ээтого аккаунта и перевести юзеру.!!!!!!!!!!!!!!!!! 
+// TODO TODO TODO  ЕСЛИ ВСЕ токены сняты и нет токенов коммьюнити, СНЯТЬ СОЛЫ С ATA для юзера
+
+
+
+
+        // To prevent a faulty manager fee account from preventing withdrawals
+        // if the token program does not own the account, or if the account is not initialized
+        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key
+            || stake_pool.check_manager_fee_info(manager_fee_info).is_err()
+        {
+            0
+        } else {
+            stake_pool
+                .calc_pool_tokens_sol_withdrawal_fee(pool_tokens)
+                .ok_or(StakePoolError::CalculationFailure)?
+        };
+        let pool_tokens_burnt = pool_tokens
+            .checked_sub(pool_tokens_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let withdraw_lamports = stake_pool
+            .convert_amount_of_pool_tokens_to_amount_of_lamports(pool_tokens_burnt)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        if withdraw_lamports == 0 {
+            return Err(StakePoolError::WithdrawalTooSmall.into());
+        }
+
+        let new_reserve_lamports = reserve_stake_info
+            .lamports()
+            .saturating_sub(withdraw_lamports);
+        let stake_state = try_from_slice_unchecked::<stake::state::StakeState>(
+            &reserve_stake_info.data.borrow(),
+        )?;
+        if let stake::state::StakeState::Initialized(meta) = stake_state {
+            let minimum_reserve_lamports = minimum_reserve_lamports(&meta);
+            if new_reserve_lamports < minimum_reserve_lamports {
+                msg!("Attempting to withdraw {} lamports, maximum possible SOL withdrawal is {} lamports",
+                    withdraw_lamports,
+                    reserve_stake_info.lamports().saturating_sub(minimum_reserve_lamports)
+                );
+                return Err(StakePoolError::SolWithdrawalTooLarge.into());
+            }
+        } else {
+            msg!("Reserve stake account not in intialized state");
+            return Err(StakePoolError::WrongStakeState.into());
+        };
+
+        Self::token_burn(
+            token_program_info.clone(),
+            burn_from_pool_info.clone(),
+            pool_mint_info.clone(),
+            user_transfer_authority_info.clone(),
+            pool_tokens_burnt,
+        )?;
+
+        if pool_tokens_fee > 0 {
+            Self::token_transfer(
+                token_program_info.clone(),
+                burn_from_pool_info.clone(),
+                manager_fee_info.clone(),
+                user_transfer_authority_info.clone(),
+                pool_tokens_fee,
+            )?;
+        }
+
+        Self::stake_withdraw(
+            stake_pool_info.key,
+            reserve_stake_info.clone(),
+            withdraw_authority_info.clone(),
+            AUTHORITY_WITHDRAW,
+            stake_pool.stake_withdraw_bump_seed,
+            destination_lamports_info.clone(),
+            clock_info.clone(),
+            stake_history_info.clone(),
+            stake_program_info.clone(),
+            withdraw_lamports,
+        )?;
+
+        stake_pool.pool_token_supply = stake_pool
+            .pool_token_supply
+            .checked_sub(pool_tokens_burnt)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.total_lamports = stake_pool
+            .total_lamports
+            .checked_sub(withdraw_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// Processes [DaoStrategyWithdrawStake](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_dao_strategy_withdraw_stake(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        pool_tokens: u64,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let validator_list_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let stake_split_from = next_account_info(account_info_iter)?;
+        let stake_split_to = next_account_info(account_info_iter)?;
+        let user_stake_authority_info = next_account_info(account_info_iter)?;
+        let user_transfer_authority_info = next_account_info(account_info_iter)?;
+        let burn_from_pool_info = next_account_info(account_info_iter)?;
+        let manager_fee_info = next_account_info(account_info_iter)?;
+        let pool_mint_info = next_account_info(account_info_iter)?;
+        let clock_info = next_account_info(account_info_iter)?;
+        let clock = &Clock::from_account_info(clock_info)?;
+        let token_program_info = next_account_info(account_info_iter)?;
+        let stake_program_info = next_account_info(account_info_iter)?;
+        let dao_community_tokens_to_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
+        let owner_wallet_info = next_account_info(account_info_iter)?;
+        let community_token_dto_info = next_account_info(account_info_iter)?;
+
+        check_stake_program(stake_program_info.key)?;
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        if stake_pool.last_update_epoch < clock.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        stake_pool.check_mint(pool_mint_info)?;
+        stake_pool.check_validator_list(validator_list_info)?;
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+
+        if stake_pool.manager_fee_account != *manager_fee_info.key {
+            return Err(StakePoolError::InvalidFeeAccount.into());
+        }
+        if stake_pool.token_program_id != *token_program_info.key {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+
+        check_account_owner(validator_list_info, program_id)?;
+        let mut validator_list_data = validator_list_info.data.borrow_mut();
+        let (header, mut validator_list) =
+            ValidatorListHeader::deserialize_vec(&mut validator_list_data)?;
+        if !header.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        if !owner_wallet_info.is_signer {
+            return Err(StakePoolError::SignatureMissing.into());
+        }
+        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_staking_rewards_dto_info.data_is_empty()
+            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_dto_info.data_is_empty()
+            || community_token_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+
+        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if dao_community_tokens_to_info.data_is_empty()
+            || dao_community_tokens_to_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        community_token_staking_rewards.initial_staking_epoch = clock.epoch;
+        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+
+
+
+// TODO TODO TODO  ЕСЛИ ВСЕ токены сняты, то снять солы с ээтого аккаунта и перевести юзеру.!!!!!!!!!!!!!!!!! 
+// TODO TODO TODO  ЕСЛИ ВСЕ токены сняты и нет токенов коммьюнити, СНЯТЬ СОЛЫ С ATA для юзера
+
+
+
+
+
+        // To prevent a faulty manager fee account from preventing withdrawals
+        // if the token program does not own the account, or if the account is not initialized
+        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key
+            || stake_pool.check_manager_fee_info(manager_fee_info).is_err()
+        {
+            0
+        } else {
+            stake_pool
+                .calc_pool_tokens_stake_withdrawal_fee(pool_tokens)
+                .ok_or(StakePoolError::CalculationFailure)?
+        };
+        let pool_tokens_burnt = pool_tokens
+            .checked_sub(pool_tokens_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let withdraw_lamports = stake_pool
+            .convert_amount_of_pool_tokens_to_amount_of_lamports(pool_tokens_burnt)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        if withdraw_lamports == 0 {
+            return Err(StakePoolError::WithdrawalTooSmall.into());
+        }
+
+        let has_active_stake = validator_list
+            .find::<ValidatorStakeInfo>(
+                &0u64.to_le_bytes(),
+                ValidatorStakeInfo::active_lamports_not_equal,
+            )
+            .is_some();
+
+        let validator_list_item_info = if *stake_split_from.key == stake_pool.reserve_stake {
+            // check that the validator stake accounts have no withdrawable stake
+            let has_transient_stake = validator_list
+                .find::<ValidatorStakeInfo>(
+                    &0u64.to_le_bytes(),
+                    ValidatorStakeInfo::transient_lamports_not_equal,
+                )
+                .is_some();
+            if has_transient_stake || has_active_stake {
+                msg!("Error withdrawing from reserve: validator stake accounts have lamports available, please use those first.");
+                return Err(StakePoolError::StakeLamportsNotEqualToMinimum.into());
+            }
+
+            // check that reserve has enough (should never fail, but who knows?)
+            let stake_state = try_from_slice_unchecked::<stake::state::StakeState>(
+                &stake_split_from.data.borrow(),
+            )?;
+            let meta = stake_state.meta().ok_or(StakePoolError::WrongStakeState)?;
+            stake_split_from
+                .lamports()
+                .checked_sub(minimum_reserve_lamports(&meta))
+                .ok_or(StakePoolError::StakeLamportsNotEqualToMinimum)?;
+            None
+        } else {
+            let (_, stake) = get_stake_state(stake_split_from)?;
+            let vote_account_address = stake.delegation.voter_pubkey;
+
+            if let Some(preferred_withdraw_validator) =
+                stake_pool.preferred_withdraw_validator_vote_address
+            {
+                let preferred_validator_info = validator_list
+                    .find::<ValidatorStakeInfo>(
+                        preferred_withdraw_validator.as_ref(),
+                        ValidatorStakeInfo::memcmp_pubkey,
+                    )
+                    .ok_or(StakePoolError::ValidatorNotFound)?;
+                if preferred_withdraw_validator != vote_account_address
+                    && preferred_validator_info.active_stake_lamports > 0
+                {
+                    msg!("Validator vote address {} is preferred for withdrawals, it currently has {} lamports available. Please withdraw those before using other validator stake accounts.", preferred_withdraw_validator, preferred_validator_info.active_stake_lamports);
+                    return Err(StakePoolError::IncorrectWithdrawVoteAddress.into());
+                }
+            }
+
+            let validator_stake_info = validator_list
+                .find_mut::<ValidatorStakeInfo>(
+                    vote_account_address.as_ref(),
+                    ValidatorStakeInfo::memcmp_pubkey,
+                )
+                .ok_or(StakePoolError::ValidatorNotFound)?;
+
+            // if there's any active stake, we must withdraw from an active
+            // stake account
+            let withdrawing_from_transient_stake = if has_active_stake {
+                check_validator_stake_address(
+                    program_id,
+                    stake_pool_info.key,
+                    stake_split_from.key,
+                    &vote_account_address,
+                )?;
+                false
+            } else {
+                check_transient_stake_address(
+                    program_id,
+                    stake_pool_info.key,
+                    stake_split_from.key,
+                    &vote_account_address,
+                    validator_stake_info.transient_seed_suffix_start,
+                )?;
+                true
+            };
+
+            if validator_stake_info.status != StakeStatus::Active {
+                msg!("Validator is marked for removal and no longer allowing withdrawals");
+                return Err(StakePoolError::ValidatorNotFound.into());
+            }
+
+            let remaining_lamports = stake.delegation.stake.saturating_sub(withdraw_lamports);
+            if remaining_lamports < MINIMUM_ACTIVE_STAKE {
+                msg!("Attempting to withdraw {} lamports from validator account with {} stake lamports, {} must remain", withdraw_lamports, stake.delegation.stake, MINIMUM_ACTIVE_STAKE);
+                return Err(StakePoolError::StakeLamportsNotEqualToMinimum.into());
+            }
+            Some((validator_stake_info, withdrawing_from_transient_stake))
+        };
+
+        Self::token_burn(
+            token_program_info.clone(),
+            burn_from_pool_info.clone(),
+            pool_mint_info.clone(),
+            user_transfer_authority_info.clone(),
+            pool_tokens_burnt,
+        )?;
+
+        Self::stake_split(
+            stake_pool_info.key,
+            stake_split_from.clone(),
+            withdraw_authority_info.clone(),
+            AUTHORITY_WITHDRAW,
+            stake_pool.stake_withdraw_bump_seed,
+            withdraw_lamports,
+            stake_split_to.clone(),
+        )?;
+
+        Self::stake_authorize_signed(
+            stake_pool_info.key,
+            stake_split_to.clone(),
+            withdraw_authority_info.clone(),
+            AUTHORITY_WITHDRAW,
+            stake_pool.stake_withdraw_bump_seed,
+            user_stake_authority_info.key,
+            clock_info.clone(),
+            stake_program_info.clone(),
+        )?;
+
+        if pool_tokens_fee > 0 {
+            Self::token_transfer(
+                token_program_info.clone(),
+                burn_from_pool_info.clone(),
+                manager_fee_info.clone(),
+                user_transfer_authority_info.clone(),
+                pool_tokens_fee,
+            )?;
+        }
+
+        stake_pool.pool_token_supply = stake_pool
+            .pool_token_supply
+            .checked_sub(pool_tokens_burnt)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.total_lamports = stake_pool
+            .total_lamports
+            .checked_sub(withdraw_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        if let Some((validator_list_item, withdrawing_from_transient_stake_account)) =
+            validator_list_item_info
+        {
+            if withdrawing_from_transient_stake_account {
+                validator_list_item.transient_stake_lamports = validator_list_item
+                    .transient_stake_lamports
+                    .checked_sub(withdraw_lamports)
+                    .ok_or(StakePoolError::CalculationFailure)?;
+            } else {
+                validator_list_item.active_stake_lamports = validator_list_item
+                    .active_stake_lamports
+                    .checked_sub(withdraw_lamports)
+                    .ok_or(StakePoolError::CalculationFailure)?;
+            }
+        }
 
         Ok(())
     }
@@ -3250,12 +3944,6 @@ impl Processor {
                 msg!("Instruction: CreateCommunityToken");
                 Self::process_create_community_token(program_id, accounts, token_mint, lamports, space)
             }
-            StakePoolInstruction::ChangeCommunityToken {
-                token_mint,
-            } => {
-                msg!("Instruction: ChangeCommunityToken");
-                Self::process_change_community_token(program_id, accounts, token_mint)
-            }
             StakePoolInstruction::CreateDaoState {
                 is_enabled,
                 lamports,
@@ -3263,6 +3951,25 @@ impl Processor {
             } => {
                 msg!("Instruction: CreateDaoState");
                 Self::process_create_dao_state(program_id, accounts, is_enabled, lamports, space)
+            }
+            StakePoolInstruction::CreateCommunityTokenStakingRewards {
+                lamports,
+                space
+            } => {
+                msg!("Instruction: CreateCommunityTokenStakingRewards");
+                Self::process_create_community_token_staking_rewards(program_id, accounts, lamports, space)
+            }
+            StakePoolInstruction::DaoStrategyDepositSol(lamports) => {
+                msg!("Instruction: DaoStrategyDepositSol");
+                Self::process_dao_strategy_deposit_sol(program_id, accounts, lamports)
+            }
+            StakePoolInstruction::DaoStrategyWithdrawSol(pool_tokens) => {
+                msg!("Instruction: DaoStrategyWithdrawSol");
+                Self::process_dao_strategy_withdraw_sol(program_id, accounts, pool_tokens)
+            }
+            StakePoolInstruction::DaoStrategyWithdrawStake(amount) => {
+                msg!("Instruction: DaoStrategyWithdrawStake");
+                Self::process_dao_strategy_withdraw_stake(program_id, accounts, amount)
             }
         }
     }
@@ -3316,7 +4023,8 @@ impl PrintProgramError for StakePoolError {
             StakePoolError::LiquiditySolWithdrawalTooLargeAtTime => msg!("Error: Too much liquidity SOL withdrawn from the stake pool's reserve account, stake pool's reserve account does not have such liquidity at time"),
             StakePoolError::SolLessThanLiquiditySol => msg!("Error: The number of sol on the stake pool's reserve account is less than the number of liquidity sol"),
             StakePoolError::InvalidPdaAddress => msg!("Error: The PDA address provided doesn't match the PDA generated by the program."),
-            StakePoolError::DataDoesNotExist => msg!("Error: Data does not exist in account, but should exists."),
+            StakePoolError::DataDoesNotExist => msg!("Error: Data does not exist in account, but should exists. It is mean account does not exist."),
+            StakePoolError::DataAlreadyExists => msg!("Error: Data exists in account, but should not exists. It is mean account exist."),
         }
     }
 }
