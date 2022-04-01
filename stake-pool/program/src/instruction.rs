@@ -410,7 +410,8 @@ pub enum StakePoolInstruction {
     ///   1. `[s]` Manager
     ///   2. `[w]` Account storing community token dto
     ///   3. `[w]` Account storing dao state dto
-    ///   4  `[]` System program account
+    ///   4  `[]` Rent sysvar
+    ///   5  `[]` System program account
     CreateCommunityToken {
         ///   Community token`s mint adress
         #[allow(dead_code)] // but it's not
@@ -420,7 +421,8 @@ pub enum StakePoolInstruction {
     ///   Create account for storing DAO`s state
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
-    ///   3. `[w]` Account storing dao state dto
+    ///   2. `[w]` Account storing dao state dto
+    ///   3  `[]` Rent sysvar
     ///   4  `[]` System program account
     CreateDaoState {
         /// Is DAO enabled for StakePool
@@ -432,6 +434,7 @@ pub enum StakePoolInstruction {
     ///   0. `[]` Stake pool
     ///   1. `[s]` Owner wallet
     ///   2. `[w]` Account storing community token staking rewards dto
+    ///   3. `[]` Rent sysvar
     ///   4  `[]` System program account
     CreateCommunityTokenStakingRewards,
 
