@@ -18,6 +18,7 @@ use {
         account_info::next_account_info,
         account_info::AccountInfo,
         borsh::try_from_slice_unchecked,
+        borsh::get_instance_packed_len,
         clock::{Clock, Epoch},
         decode_error::DecodeError,
         entrypoint::ProgramResult,
@@ -2955,14 +2956,13 @@ impl Processor {
         program_id: &Pubkey,
         accounts: &[AccountInfo],
         token_mint: Pubkey,
-        lamports: u64,
-        space: u64
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let manager_info = next_account_info(account_info_iter)?;
         let community_token_dto_info = next_account_info(account_info_iter)?;
         let dao_state_dto_info = next_account_info(account_info_iter)?;
+        let rent_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
@@ -2989,16 +2989,24 @@ impl Processor {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
+        let rent = &Rent::from_account_info(rent_info)?;
+
         let mut dao_state = try_from_slice_unchecked::<DaoState>(&dao_state_dto_info.data.borrow())?;
         dao_state.is_enabled = true;
         dao_state.serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
+
+        let community_token = CommunityToken {
+            token_mint
+        };
+
+        let space = get_instance_packed_len(&community_token)?;
 
         invoke_signed(
             &system_instruction::create_account(
                 manager_info.key,
                 community_token_dto_info.key,
-                lamports,
-                space,
+                rent.minimum_balance(space),
+                space as u64,
                 program_id,
             ),
             &[
@@ -3015,10 +3023,8 @@ impl Processor {
             ]
         )?;
 
-        CommunityToken {
-            token_mint
-        }
-        .serialize(&mut *community_token_dto_info.data.borrow_mut())?;
+        
+        community_token.serialize(&mut *community_token_dto_info.data.borrow_mut())?;
 
         Ok(())
     }
@@ -3029,13 +3035,12 @@ impl Processor {
         program_id: &Pubkey,
         accounts: &[AccountInfo],
         is_enabled: bool,
-        lamports: u64,
-        space: u64
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let manager_info = next_account_info(account_info_iter)?;
         let dao_state_dto_info = next_account_info(account_info_iter)?;
+        let rent_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
@@ -3055,13 +3060,21 @@ impl Processor {
             || dao_state_dto_info.lamports() != 0 {
             return Err(StakePoolError::DataAlreadyExists.into());
         }
+        
+        let rent = &Rent::from_account_info(rent_info)?;
+
+        let dao_state = DaoState {
+            is_enabled
+        };
+
+        let space = get_instance_packed_len(&dao_state)?;
 
         invoke_signed(
             &system_instruction::create_account(
                 manager_info.key,
                 dao_state_dto_info.key,
-                lamports,
-                space,
+                rent.minimum_balance(space),
+                space as u64,
                 program_id,
             ),
             &[
@@ -3078,10 +3091,8 @@ impl Processor {
             ]
         )?;
 
-        DaoState {
-            is_enabled
-        }
-        .serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
+        
+        dao_state.serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
 
         Ok(())
     }
@@ -3091,13 +3102,12 @@ impl Processor {
     fn process_create_community_token_staking_rewards(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
-        lamports: u64,
-        space: u64
-    ) -> ProgramResult {
+    ) -> ProgramResult {        
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let owner_wallet_info = next_account_info(account_info_iter)?;
         let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
+        let rent_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
@@ -3122,13 +3132,25 @@ impl Processor {
             || community_token_staking_rewards_dto_info.lamports() != 0 {
             return Err(StakePoolError::DataAlreadyExists.into());
         }
+
+        let community_token_staking_rewards = CommunityTokenStakingRewards {
+            pda_account_type: PdaAccountType::CommunityTokenStakingRewards,
+            program_id: program_id.clone(),
+            stake_pool_address: stake_pool_info.key.clone(),
+            owner_wallet: owner_wallet_info.key.clone(),
+            initial_staking_epoch: epoch
+        };
+
+        let rent = &Rent::from_account_info(rent_info)?;
+
+        let space = get_instance_packed_len(&community_token_staking_rewards)?;
         
         invoke_signed(
             &system_instruction::create_account(
                 owner_wallet_info.key,
                 community_token_staking_rewards_dto_info.key,
-                lamports,
-                space,
+                rent.minimum_balance(space),
+                space as u64,
                 program_id,
             ),
             &[
@@ -3146,14 +3168,7 @@ impl Processor {
             ]
         )?;
 
-        CommunityTokenStakingRewards {
-            pda_account_type: PdaAccountType::CommunityTokenStakingRewards,
-            program_id: program_id.clone(),
-            stake_pool_address: stake_pool_info.key.clone(),
-            owner_wallet: owner_wallet_info.key.clone(),
-            initial_staking_epoch: epoch
-        }
-        .serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         Ok(())
     }
@@ -3938,26 +3953,19 @@ impl Processor {
             }
             StakePoolInstruction::CreateCommunityToken {
                 token_mint,
-                lamports,
-                space
             } => {
                 msg!("Instruction: CreateCommunityToken");
-                Self::process_create_community_token(program_id, accounts, token_mint, lamports, space)
+                Self::process_create_community_token(program_id, accounts, token_mint)
             }
             StakePoolInstruction::CreateDaoState {
                 is_enabled,
-                lamports,
-                space
             } => {
                 msg!("Instruction: CreateDaoState");
-                Self::process_create_dao_state(program_id, accounts, is_enabled, lamports, space)
+                Self::process_create_dao_state(program_id, accounts, is_enabled)
             }
-            StakePoolInstruction::CreateCommunityTokenStakingRewards {
-                lamports,
-                space
-            } => {
+            StakePoolInstruction::CreateCommunityTokenStakingRewards => {
                 msg!("Instruction: CreateCommunityTokenStakingRewards");
-                Self::process_create_community_token_staking_rewards(program_id, accounts, lamports, space)
+                Self::process_create_community_token_staking_rewards(program_id, accounts)
             }
             StakePoolInstruction::DaoStrategyDepositSol(lamports) => {
                 msg!("Instruction: DaoStrategyDepositSol");

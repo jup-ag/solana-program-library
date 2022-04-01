@@ -415,12 +415,6 @@ pub enum StakePoolInstruction {
         ///   Community token`s mint adress
         #[allow(dead_code)] // but it's not
         token_mint: Pubkey,
-        /// Number of lamports to transfer to the new account
-        #[allow(dead_code)] // but it's not
-        lamports: u64,
-        /// Number of bytes of memory to allocate
-        #[allow(dead_code)] // but it's not
-        space: u64,
     },
 
     ///   Create account for storing DAO`s state
@@ -432,12 +426,6 @@ pub enum StakePoolInstruction {
         /// Is DAO enabled for StakePool
         #[allow(dead_code)] // but it's not
         is_enabled: bool,
-        /// Number of lamports to transfer to the new account
-        #[allow(dead_code)] // but it's not
-        lamports: u64,
-        /// Number of bytes of memory to allocate
-        #[allow(dead_code)] // but it's not
-        space: u64,
     },
 
     ///   Create account for storing information for DAO`s community tokens destribution strategy
@@ -445,14 +433,7 @@ pub enum StakePoolInstruction {
     ///   1. `[s]` Owner wallet
     ///   2. `[w]` Account storing community token staking rewards dto
     ///   4  `[]` System program account
-    CreateCommunityTokenStakingRewards {
-        /// Number of lamports to transfer to the new account
-        #[allow(dead_code)] // but it's not
-        lamports: u64,
-        /// Number of bytes of memory to allocate
-        #[allow(dead_code)] // but it's not
-        space: u64,
-    },
+    CreateCommunityTokenStakingRewards,
 
     ///   Deposit SOL directly into the pool's reserve account with existing DAO`s community tokens strategy. The output is a "pool" token
     ///   representing ownership into the pool. Inputs are converted to the current ratio.
@@ -1566,8 +1547,6 @@ pub fn create_community_token(
     manager: &Pubkey,
     community_token_dto: &Pubkey,
     token_mint: &Pubkey,
-    community_token_lamports: u64,
-    community_token_space: u64,
     dao_state_dto: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
@@ -1575,6 +1554,7 @@ pub fn create_community_token(
         AccountMeta::new_readonly(*manager, true),
         AccountMeta::new(*community_token_dto, false),
         AccountMeta::new(*dao_state_dto, false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
     ]; 
 
@@ -1583,8 +1563,6 @@ pub fn create_community_token(
         accounts,
         data: StakePoolInstruction::CreateCommunityToken {
             token_mint: *token_mint,
-            lamports: community_token_lamports,
-            space: community_token_space
         }
             .try_to_vec()
             .unwrap(),
@@ -1598,13 +1576,12 @@ pub fn create_dao_state(
     manager: &Pubkey,
     dao_state_dto: &Pubkey,
     is_enabled: bool,
-    dao_state_lamports: u64,
-    dao_state_space: u64
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
         AccountMeta::new_readonly(*manager, true),
         AccountMeta::new(*dao_state_dto, false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
     ]; 
 
@@ -1613,8 +1590,6 @@ pub fn create_dao_state(
         accounts,
         data: StakePoolInstruction::CreateDaoState { 
             is_enabled,
-            lamports: dao_state_lamports,
-            space: dao_state_space
         }
             .try_to_vec()
             .unwrap(),
@@ -1627,23 +1602,19 @@ pub fn create_community_token_staking_rewards(
     stake_pool: &Pubkey,
     owner_wallet: &Pubkey,
     community_token_staking_rewards_dto: &Pubkey,
-    community_token_staking_rewards_lamports: u64,
-    community_token_staking_rewards_space: u64,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
         AccountMeta::new_readonly(*owner_wallet, true),
         AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
     ]; 
     
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::CreateCommunityTokenStakingRewards {
-            lamports: community_token_staking_rewards_lamports,
-            space: community_token_staking_rewards_space
-        }
+        data: StakePoolInstruction::CreateCommunityTokenStakingRewards
             .try_to_vec()
             .unwrap(),
     }

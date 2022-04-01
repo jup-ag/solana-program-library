@@ -575,8 +575,6 @@ fn command_create_pool(
                 &config.manager.pubkey(),
                 &dao_state_dto_pubkey,
                 true,
-                rent_exemption_for_dao_state_dto_account,
-                dao_state_dto_length as u64
             )
         );
         initialize_instructions.push(
@@ -586,8 +584,6 @@ fn command_create_pool(
                 &config.manager.pubkey(),
                 &CommunityToken::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0,
                 &community_mint_keypair.as_ref().unwrap().pubkey(),
-                rent_exemption_for_community_token_dto_account,
-                community_token_dto_length as u64,
                 &dao_state_dto_pubkey,
             )
         );
@@ -599,8 +595,6 @@ fn command_create_pool(
                 &config.manager.pubkey(),
                 &dao_state_dto_pubkey,
                 false,
-                rent_exemption_for_dao_state_dto_account,
-                dao_state_dto_length as u64
             )
         );
     }
@@ -1378,8 +1372,6 @@ fn command_dao_strategy_deposit_sol(
                 stake_pool_address,
                 &from_pubkey,
                 &community_token_staking_rewards_dto_pubkey,
-                rent_exemption_for_community_token_staking_rewards_dto_account,
-                community_token_staking_rewards_dto_length as u64
             )
         );
         
@@ -2069,8 +2061,6 @@ fn command_dao_strategy_withdraw_stake(
                 stake_pool_address,
                 &config.token_owner.pubkey(),
                 &community_token_staking_rewards_dto_pubkey,
-                rent_exemption_for_community_token_staking_rewards_dto_account,
-                community_token_staking_rewards_dto_length as u64
             )
         );
 
@@ -2196,11 +2186,11 @@ fn command_dao_strategy_withdraw_stake(
             &stake_pool.manager_fee_account,
             &stake_pool.pool_mint,
             &spl_token::id(),
-            withdraw_account.pool_amount,
             &dao_community_token_receiver_account,
             &community_token_staking_rewards_dto_pubkey,
             &config.token_owner.pubkey(),
             &community_token_dto_pubkey,
+            withdraw_account.pool_amount,
         ));
     }
 
@@ -2429,8 +2419,6 @@ fn command_dao_strategy_withdraw_sol(
                 stake_pool_address,
                 &config.token_owner.pubkey(),
                 &community_token_staking_rewards_dto_pubkey,
-                rent_exemption_for_community_token_staking_rewards_dto_account,
-                community_token_staking_rewards_dto_length as u64
             )
         );
 
@@ -3247,8 +3235,6 @@ fn command_create_community_token(
             &config.manager.pubkey(),
             &community_token_dto_pubkey,
             &community_mint_keypair.pubkey(),
-            rent_exemption_for_community_token_dto_account,
-            community_token_dto_length as u64,
             &dao_state_dto_pubkey
         )
     ];
