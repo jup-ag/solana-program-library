@@ -3823,6 +3823,308 @@ impl Processor {
         Ok(())
     }
 
+    /// Processes [DaoStrategyDepositStake](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_dao_strategy_deposit_stake(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let validator_list_info = next_account_info(account_info_iter)?;
+        let stake_deposit_authority_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let stake_info = next_account_info(account_info_iter)?;
+        let validator_stake_account_info = next_account_info(account_info_iter)?;
+        let reserve_stake_account_info = next_account_info(account_info_iter)?;
+        let dest_user_pool_info = next_account_info(account_info_iter)?;
+        let manager_fee_info = next_account_info(account_info_iter)?;
+        let referrer_fee_info = next_account_info(account_info_iter)?;
+        let pool_mint_info = next_account_info(account_info_iter)?;
+        let clock_info = next_account_info(account_info_iter)?;
+        let clock = &Clock::from_account_info(clock_info)?;
+        let stake_history_info = next_account_info(account_info_iter)?;
+        let token_program_info = next_account_info(account_info_iter)?;
+        let stake_program_info = next_account_info(account_info_iter)?;
+        let dao_community_tokens_to_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
+        let owner_wallet_info = next_account_info(account_info_iter)?;
+        let community_token_dto_info = next_account_info(account_info_iter)?;
+
+        check_stake_program(stake_program_info.key)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        if stake_pool.last_update_epoch < clock.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+        stake_pool.check_stake_deposit_authority(stake_deposit_authority_info.key)?;
+        stake_pool.check_mint(pool_mint_info)?;
+        stake_pool.check_validator_list(validator_list_info)?;
+        stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+
+        if stake_pool.token_program_id != *token_program_info.key {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+
+        if stake_pool.manager_fee_account != *manager_fee_info.key {
+            return Err(StakePoolError::InvalidFeeAccount.into());
+        }
+
+        check_account_owner(validator_list_info, program_id)?;
+        let mut validator_list_data = validator_list_info.data.borrow_mut();
+        let (header, mut validator_list) =
+            ValidatorListHeader::deserialize_vec(&mut validator_list_data)?;
+        if !header.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        let (_, validator_stake) = get_stake_state(validator_stake_account_info)?;
+        let pre_all_validator_lamports = validator_stake_account_info.lamports();
+        let vote_account_address = validator_stake.delegation.voter_pubkey;
+        check_validator_stake_address(
+            program_id,
+            stake_pool_info.key,
+            validator_stake_account_info.key,
+            &vote_account_address,
+        )?;
+        if let Some(preferred_deposit) = stake_pool.preferred_deposit_validator_vote_address {
+            if preferred_deposit != vote_account_address {
+                msg!(
+                    "Incorrect deposit address, expected {}, received {}",
+                    preferred_deposit,
+                    vote_account_address
+                );
+                return Err(StakePoolError::IncorrectDepositVoteAddress.into());
+            }
+        }
+
+        if !owner_wallet_info.is_signer {
+            return Err(StakePoolError::SignatureMissing.into());
+        }
+        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_staking_rewards_dto_info.data_is_empty()
+            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_dto_info.data_is_empty()
+            || community_token_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+
+        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if dao_community_tokens_to_info.data_is_empty()
+            || dao_community_tokens_to_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        community_token_staking_rewards.initial_staking_epoch = clock.epoch;
+        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+
+        let mut validator_stake_info = validator_list
+            .find_mut::<ValidatorStakeInfo>(
+                vote_account_address.as_ref(),
+                ValidatorStakeInfo::memcmp_pubkey,
+            )
+            .ok_or(StakePoolError::ValidatorNotFound)?;
+
+        if validator_stake_info.status != StakeStatus::Active {
+            msg!("Validator is marked for removal and no longer accepting deposits");
+            return Err(StakePoolError::ValidatorNotFound.into());
+        }
+
+        msg!("Stake pre merge {}", validator_stake.delegation.stake);
+
+        let (stake_deposit_authority_program_address, deposit_bump_seed) =
+            find_deposit_authority_program_address(program_id, stake_pool_info.key);
+        if *stake_deposit_authority_info.key == stake_deposit_authority_program_address {
+            Self::stake_authorize_signed(
+                stake_pool_info.key,
+                stake_info.clone(),
+                stake_deposit_authority_info.clone(),
+                AUTHORITY_DEPOSIT,
+                deposit_bump_seed,
+                withdraw_authority_info.key,
+                clock_info.clone(),
+                stake_program_info.clone(),
+            )?;
+        } else {
+            Self::stake_authorize(
+                stake_info.clone(),
+                stake_deposit_authority_info.clone(),
+                withdraw_authority_info.key,
+                clock_info.clone(),
+                stake_program_info.clone(),
+            )?;
+        }
+
+        Self::stake_merge(
+            stake_pool_info.key,
+            stake_info.clone(),
+            withdraw_authority_info.clone(),
+            AUTHORITY_WITHDRAW,
+            stake_pool.stake_withdraw_bump_seed,
+            validator_stake_account_info.clone(),
+            clock_info.clone(),
+            stake_history_info.clone(),
+            stake_program_info.clone(),
+        )?;
+
+        let (_, post_validator_stake) = get_stake_state(validator_stake_account_info)?;
+        let post_all_validator_lamports = validator_stake_account_info.lamports();
+        msg!("Stake post merge {}", post_validator_stake.delegation.stake);
+
+        let total_deposit_lamports = post_all_validator_lamports
+            .checked_sub(pre_all_validator_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        if total_deposit_lamports < MINIMUM_DEPOSIT {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
+        let stake_deposit_lamports = post_validator_stake
+            .delegation
+            .stake
+            .checked_sub(validator_stake.delegation.stake)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let sol_deposit_lamports = total_deposit_lamports
+            .checked_sub(stake_deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let new_pool_tokens = stake_pool
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(total_deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let new_pool_tokens_from_stake = stake_pool
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let new_pool_tokens_from_sol = new_pool_tokens
+            .checked_sub(new_pool_tokens_from_stake)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let stake_deposit_fee = stake_pool
+            .calc_pool_tokens_stake_deposit_fee(new_pool_tokens_from_stake)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let sol_deposit_fee = stake_pool
+            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_from_sol)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let total_fee = stake_deposit_fee
+            .checked_add(sol_deposit_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let pool_tokens_user = new_pool_tokens
+            .checked_sub(total_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let pool_tokens_referral_fee = stake_pool
+            .calc_pool_tokens_stake_referral_fee(total_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let pool_tokens_manager_deposit_fee = total_fee
+            .checked_sub(pool_tokens_referral_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        if pool_tokens_user
+            .saturating_add(pool_tokens_manager_deposit_fee)
+            .saturating_add(pool_tokens_referral_fee)
+            != new_pool_tokens
+        {
+            return Err(StakePoolError::CalculationFailure.into());
+        }
+
+        if pool_tokens_user == 0 {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
+        Self::token_mint_to(
+            stake_pool_info.key,
+            token_program_info.clone(),
+            pool_mint_info.clone(),
+            dest_user_pool_info.clone(),
+            withdraw_authority_info.clone(),
+            AUTHORITY_WITHDRAW,
+            stake_pool.stake_withdraw_bump_seed,
+            pool_tokens_user,
+        )?;
+        if pool_tokens_manager_deposit_fee > 0 {
+            Self::token_mint_to(
+                stake_pool_info.key,
+                token_program_info.clone(),
+                pool_mint_info.clone(),
+                manager_fee_info.clone(),
+                withdraw_authority_info.clone(),
+                AUTHORITY_WITHDRAW,
+                stake_pool.stake_withdraw_bump_seed,
+                pool_tokens_manager_deposit_fee,
+            )?;
+        }
+        if pool_tokens_referral_fee > 0 {
+            Self::token_mint_to(
+                stake_pool_info.key,
+                token_program_info.clone(),
+                pool_mint_info.clone(),
+                referrer_fee_info.clone(),
+                withdraw_authority_info.clone(),
+                AUTHORITY_WITHDRAW,
+                stake_pool.stake_withdraw_bump_seed,
+                pool_tokens_referral_fee,
+            )?;
+        }
+
+        // withdraw additional lamports to the reserve
+        if sol_deposit_lamports > 0 {
+            Self::stake_withdraw(
+                stake_pool_info.key,
+                validator_stake_account_info.clone(),
+                withdraw_authority_info.clone(),
+                AUTHORITY_WITHDRAW,
+                stake_pool.stake_withdraw_bump_seed,
+                reserve_stake_account_info.clone(),
+                clock_info.clone(),
+                stake_history_info.clone(),
+                stake_program_info.clone(),
+                sol_deposit_lamports,
+            )?;
+        }
+
+        stake_pool.pool_token_supply = stake_pool
+            .pool_token_supply
+            .checked_add(new_pool_tokens)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        // We treat the extra lamports as though they were
+        // transferred directly to the reserve stake account.
+        stake_pool.total_lamports = stake_pool
+            .total_lamports
+            .checked_add(total_deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        validator_stake_info.active_stake_lamports = post_validator_stake
+            .delegation
+            .stake
+            .checked_sub(MINIMUM_ACTIVE_STAKE)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        Ok(())
+    }
+
     /// Processes [Instruction](enum.Instruction.html).
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = StakePoolInstruction::try_from_slice(input)?;
@@ -3978,6 +4280,10 @@ impl Processor {
             StakePoolInstruction::DaoStrategyWithdrawStake(amount) => {
                 msg!("Instruction: DaoStrategyWithdrawStake");
                 Self::process_dao_strategy_withdraw_stake(program_id, accounts, amount)
+            }
+            StakePoolInstruction::DaoStrategyDepositStake => {
+                msg!("Instruction: DaoStrategyDepositStake");
+                Self::process_dao_strategy_deposit_stake(program_id, accounts)
             }
         }
     }

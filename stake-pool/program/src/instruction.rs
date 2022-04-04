@@ -518,6 +518,30 @@ pub enum StakePoolInstruction {
     /// 
     ///  userdata: amount of pool tokens to withdraw
     DaoStrategyWithdrawStake(u64),
+
+    ///   Deposit some stake into the pool with existing DAO`s community tokens strategy. The output is a "pool" token representing ownership
+    ///   into the pool. Inputs are converted to the current ratio.
+    ///
+    ///   0. `[w]` Stake pool
+    ///   1. `[w]` Validator stake list storage account
+    ///   2. `[s]/[]` Stake pool deposit authority
+    ///   3. `[]` Stake pool withdraw authority
+    ///   4. `[w]` Stake account to join the pool (withdraw authority for the stake account should be first set to the stake pool deposit authority)
+    ///   5. `[w]` Validator stake account for the stake account to be merged with
+    ///   6. `[w]` Reserve stake account, to withdraw rent exempt reserve
+    ///   7. `[w]` User account to receive pool tokens
+    ///   8. `[w]` Account to receive pool fee tokens
+    ///   9. `[w]` Account to receive a portion of pool fee tokens as referral fees
+    ///   10. `[w]` Pool token mint account
+    ///   11. '[]' Sysvar clock account
+    ///   12. '[]' Sysvar stake history account
+    ///   13. `[]` Pool token program id,
+    ///   14. `[]` Stake program id,
+    ///   15  `[]` User account to hold DAO`s community tokens
+    ///   16  `[w]` Account for storing community token staking rewards dto
+    ///   17. `[s]` Owner wallet
+    ///   18  `[]` Account for storing community token dto
+    DaoStrategyDepositStake,
 }
 
 /// Creates an 'initialize' instruction.
@@ -1854,4 +1878,138 @@ pub fn dao_strategy_withdraw_stake(
             .try_to_vec()
             .unwrap(),
     }
+}
+
+/// Creates instructions required to deposit into a stake pool with existing DAO`s community tokens strategy, given a stake
+/// account owned by the user.
+pub fn dao_strategy_deposit_stake(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    validator_list_storage: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    deposit_stake_address: &Pubkey,
+    deposit_stake_withdraw_authority: &Pubkey,
+    validator_stake_account: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    pool_tokens_to: &Pubkey,
+    manager_fee_account: &Pubkey,
+    referrer_pool_tokens_account: &Pubkey,
+    pool_mint: &Pubkey,
+    token_program_id: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_dto_pubkey: &Pubkey,
+) -> Vec<Instruction> {
+    let stake_pool_deposit_authority =
+        find_deposit_authority_program_address(program_id, stake_pool).0;
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new(*validator_list_storage, false),
+        AccountMeta::new_readonly(stake_pool_deposit_authority, false),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*deposit_stake_address, false),
+        AccountMeta::new(*validator_stake_account, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*pool_tokens_to, false),
+        AccountMeta::new(*manager_fee_account, false),
+        AccountMeta::new(*referrer_pool_tokens_account, false),
+        AccountMeta::new(*pool_mint, false),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
+        AccountMeta::new_readonly(sysvar::stake_history::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new_readonly(stake::program::id(), false),
+        AccountMeta::new_readonly(*dao_community_tokens_to, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+    ];
+    vec![
+        stake::instruction::authorize(
+            deposit_stake_address,
+            deposit_stake_withdraw_authority,
+            &stake_pool_deposit_authority,
+            stake::state::StakeAuthorize::Staker,
+            None,
+        ),
+        stake::instruction::authorize(
+            deposit_stake_address,
+            deposit_stake_withdraw_authority,
+            &stake_pool_deposit_authority,
+            stake::state::StakeAuthorize::Withdrawer,
+            None,
+        ),
+        Instruction {
+            program_id: *program_id,
+            accounts,
+            data: StakePoolInstruction::DaoStrategyDepositStake.try_to_vec().unwrap(),
+        },
+    ]
+}
+
+/// Creates instructions required to deposit into a stake pool with existing DAO`s community tokens strategy, given a stake
+/// account owned by the user. The difference with `deposit()` is that a deposit
+/// authority must sign this instruction, which is required for private pools.
+pub fn dao_strategy_deposit_stake_with_authority(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    validator_list_storage: &Pubkey,
+    stake_pool_deposit_authority: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    deposit_stake_address: &Pubkey,
+    deposit_stake_withdraw_authority: &Pubkey,
+    validator_stake_account: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    pool_tokens_to: &Pubkey,
+    manager_fee_account: &Pubkey,
+    referrer_pool_tokens_account: &Pubkey,
+    pool_mint: &Pubkey,
+    token_program_id: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_dto_pubkey: &Pubkey,
+) -> Vec<Instruction> {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new(*validator_list_storage, false),
+        AccountMeta::new_readonly(*stake_pool_deposit_authority, true),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*deposit_stake_address, false),
+        AccountMeta::new(*validator_stake_account, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*pool_tokens_to, false),
+        AccountMeta::new(*manager_fee_account, false),
+        AccountMeta::new(*referrer_pool_tokens_account, false),
+        AccountMeta::new(*pool_mint, false),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
+        AccountMeta::new_readonly(sysvar::stake_history::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new_readonly(stake::program::id(), false),
+        AccountMeta::new_readonly(*dao_community_tokens_to, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+    ];
+    vec![
+        stake::instruction::authorize(
+            deposit_stake_address,
+            deposit_stake_withdraw_authority,
+            stake_pool_deposit_authority,
+            stake::state::StakeAuthorize::Staker,
+            None,
+        ),
+        stake::instruction::authorize(
+            deposit_stake_address,
+            deposit_stake_withdraw_authority,
+            stake_pool_deposit_authority,
+            stake::state::StakeAuthorize::Withdrawer,
+            None,
+        ),
+        Instruction {
+            program_id: *program_id,
+            accounts,
+            data: StakePoolInstruction::DaoStrategyDepositStake.try_to_vec().unwrap(),
+        },
+    ]
 }

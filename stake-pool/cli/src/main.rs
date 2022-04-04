@@ -1040,6 +1040,194 @@ fn command_deposit_stake(
     Ok(())
 }
 
+fn command_dao_strategy_deposit_stake(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    stake: &Pubkey,
+    withdraw_authority: Box<dyn Signer>,
+    pool_token_receiver_account: &Option<Pubkey>,
+    referrer_token_account: &Option<Pubkey>,
+) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+
+    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let dao_state_dto_account = config
+        .rpc_client
+        .get_account(&dao_state_dto_pubkey)?;
+
+    let dao_state = try_from_slice_unchecked::<DaoState>(dao_state_dto_account.data.as_slice())?;
+    if !dao_state.is_enabled {
+        return Err("Logic error: DAO is not enabled for the pool yet. You should enable it firstly.".into());
+    }
+
+    let community_token_dto_pubkey = CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let community_token_dto_account = config
+        .rpc_client
+        .get_account(&community_token_dto_pubkey)?;
+
+    let community_token = try_from_slice_unchecked::<CommunityToken>(community_token_dto_account.data.as_slice())?;
+
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+    let stake_state = get_stake_state(&config.rpc_client, stake)?;
+
+    if config.verbose {
+        println!("Depositing stake account {:?}", stake_state);
+    }
+    let vote_account = match stake_state {
+        stake::state::StakeState::Stake(_, stake) => Ok(stake.delegation.voter_pubkey),
+        _ => Err("Wrong stake account state, must be delegated to validator"),
+    }?;
+
+    // Check if this vote account has staking account in the pool
+    let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+    if !validator_list.contains(&vote_account) {
+        return Err("Stake account for this validator does not exist in the pool.".into());
+    }
+
+    // Calculate validator stake account address linked to the pool
+    let (validator_stake_account, _) =
+        find_stake_program_address(&spl_stake_pool::id(), &vote_account, stake_pool_address);
+
+    let validator_stake_state = get_stake_state(&config.rpc_client, &validator_stake_account)?;
+    println!(
+        "Depositing stake {} into stake pool account {}",
+        stake, validator_stake_account
+    );
+    if config.verbose {
+        println!("{:?}", validator_stake_state);
+    }
+
+    let mut total_rent_free_balances: u64 = 0;
+
+    let mut instructions: Vec<Instruction> = vec![];
+
+    let mut signers: Vec<&dyn Signer> = vec![];
+
+    let community_token_staking_rewards_dto_pubkey = CommunityTokenStakingRewards::find_address(&spl_stake_pool::id(), stake_pool_address, &config.token_owner.pubkey()).0;
+    let community_token_staking_rewards_dto_account = config
+        .rpc_client
+        .get_account(&community_token_staking_rewards_dto_pubkey);
+    if community_token_staking_rewards_dto_account.is_err() {
+        let community_token_staking_rewards_dto_length = get_packed_len::<CommunityTokenStakingRewards>();
+
+        let rent_exemption_for_community_token_staking_rewards_dto_account = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(community_token_staking_rewards_dto_length)?;
+
+        instructions.push(
+            spl_stake_pool::instruction::create_community_token_staking_rewards(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &config.token_owner.pubkey(),
+                &community_token_staking_rewards_dto_pubkey,
+            )
+        );
+        
+        signers.push(config.token_owner.as_ref());
+
+        total_rent_free_balances = total_rent_free_balances + rent_exemption_for_community_token_staking_rewards_dto_account;
+    }
+
+    signers.push(config.fee_payer.as_ref());
+    signers.push(withdraw_authority.as_ref());
+
+    // Create token account if not specified
+    let pool_token_receiver_account =
+        pool_token_receiver_account.unwrap_or(add_associated_token_account(
+            config,
+            &stake_pool.pool_mint,
+            &config.token_owner.pubkey(),
+            &mut instructions,
+            &mut total_rent_free_balances,
+        ));
+
+    let referrer_token_account = referrer_token_account.unwrap_or(pool_token_receiver_account);
+
+    let dao_community_token_receiver_account = add_associated_token_account(
+        config,
+        &community_token.token_mint,
+        &config.token_owner.pubkey(),
+        &mut instructions,
+        &mut total_rent_free_balances,
+    );
+
+    let pool_withdraw_authority =
+        find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
+
+    let mut deposit_instructions =
+        if let Some(stake_deposit_authority) = config.funding_authority.as_ref() {
+            signers.push(stake_deposit_authority.as_ref());
+            if stake_deposit_authority.pubkey() != stake_pool.stake_deposit_authority {
+                let error = format!(
+                    "Invalid deposit authority specified, expected {}, received {}",
+                    stake_pool.stake_deposit_authority,
+                    stake_deposit_authority.pubkey()
+                );
+                return Err(error.into());
+            }
+
+            spl_stake_pool::instruction::dao_strategy_deposit_stake_with_authority(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &stake_pool.validator_list,
+                &stake_deposit_authority.pubkey(),
+                &pool_withdraw_authority,
+                stake,
+                &withdraw_authority.pubkey(),
+                &validator_stake_account,
+                &stake_pool.reserve_stake,
+                &pool_token_receiver_account,
+                &stake_pool.manager_fee_account,
+                &referrer_token_account,
+                &stake_pool.pool_mint,
+                &spl_token::id(),
+                &dao_community_token_receiver_account,
+                &community_token_staking_rewards_dto_pubkey,
+                &config.token_owner.pubkey(),
+                &community_token_dto_pubkey
+            )
+        } else {
+            spl_stake_pool::instruction::dao_strategy_deposit_stake(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &stake_pool.validator_list,
+                &pool_withdraw_authority,
+                stake,
+                &withdraw_authority.pubkey(),
+                &validator_stake_account,
+                &stake_pool.reserve_stake,
+                &pool_token_receiver_account,
+                &stake_pool.manager_fee_account,
+                &referrer_token_account,
+                &stake_pool.pool_mint,
+                &spl_token::id(),
+                &dao_community_token_receiver_account,
+                &community_token_staking_rewards_dto_pubkey,
+                &config.token_owner.pubkey(),
+                &community_token_dto_pubkey
+            )
+        };
+
+    instructions.append(&mut deposit_instructions);
+
+    let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+    let message = Message::new_with_blockhash(
+        &instructions,
+        Some(&config.fee_payer.pubkey()),
+        &recent_blockhash,
+    );
+    check_fee_payer_balance(
+        config,
+        total_rent_free_balances + config.rpc_client.get_fee_for_message(&message)?,
+    )?;
+    unique_signers!(signers);
+    let transaction = Transaction::new(&signers, message, recent_blockhash);
+    send_transaction(config, transaction)?;
+    Ok(())
+}
+
 fn command_deposit_all_stake(
     config: &Config,
     stake_pool_address: &Pubkey,
@@ -1162,6 +1350,210 @@ fn command_deposit_all_stake(
                 &referrer_token_account,
                 &stake_pool.pool_mint,
                 &spl_token::id(),
+            )
+        };
+
+        let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+        let message = Message::new_with_blockhash(
+            &instructions,
+            Some(&config.fee_payer.pubkey()),
+            &recent_blockhash,
+        );
+        check_fee_payer_balance(config, config.rpc_client.get_fee_for_message(&message)?)?;
+        let transaction = Transaction::new(&signers, message, recent_blockhash);
+        send_transaction(config, transaction)?;
+    }
+    Ok(())
+}
+
+fn command_dao_strategy_deposit_all_stake(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    stake_authority: &Pubkey,
+    withdraw_authority: Box<dyn Signer>,
+    pool_token_receiver_account: &Option<Pubkey>,
+    referrer_token_account: &Option<Pubkey>,
+) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+
+    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let dao_state_dto_account = config
+        .rpc_client
+        .get_account(&dao_state_dto_pubkey)?;
+
+    let dao_state = try_from_slice_unchecked::<DaoState>(dao_state_dto_account.data.as_slice())?;
+    if !dao_state.is_enabled {
+        return Err("Logic error: DAO is not enabled for the pool yet. You should enable it firstly.".into());
+    }
+
+    let community_token_dto_pubkey = CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let community_token_dto_account = config
+        .rpc_client
+        .get_account(&community_token_dto_pubkey)?;
+
+    let community_token = try_from_slice_unchecked::<CommunityToken>(community_token_dto_account.data.as_slice())?;
+
+    let stake_addresses = get_all_stake(&config.rpc_client, stake_authority)?;
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+
+    let mut total_rent_free_balances: u64 = 0;
+
+    let mut create_account_instructions: Vec<Instruction> = vec![];
+
+    let mut create_account_signers: Vec<&dyn Signer> = vec![];
+
+    let community_token_staking_rewards_dto_pubkey = CommunityTokenStakingRewards::find_address(&spl_stake_pool::id(), stake_pool_address, &config.token_owner.pubkey()).0;
+    let community_token_staking_rewards_dto_account = config
+        .rpc_client
+        .get_account(&community_token_staking_rewards_dto_pubkey);
+    if community_token_staking_rewards_dto_account.is_err() {
+        let community_token_staking_rewards_dto_length = get_packed_len::<CommunityTokenStakingRewards>();
+
+        let rent_exemption_for_community_token_staking_rewards_dto_account = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(community_token_staking_rewards_dto_length)?;
+
+        create_account_instructions.push(
+            spl_stake_pool::instruction::create_community_token_staking_rewards(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &config.token_owner.pubkey(),
+                &community_token_staking_rewards_dto_pubkey,
+            )
+        );
+        
+        create_account_signers.push(config.token_owner.as_ref());
+
+        total_rent_free_balances = total_rent_free_balances + rent_exemption_for_community_token_staking_rewards_dto_account;
+    }
+    // Create token account if not specified
+    let pool_token_receiver_account =
+        pool_token_receiver_account.unwrap_or(add_associated_token_account(
+            config,
+            &stake_pool.pool_mint,
+            &config.token_owner.pubkey(),
+            &mut create_account_instructions,
+            &mut total_rent_free_balances,
+        ));
+    let dao_community_token_receiver_account = add_associated_token_account(
+            config,
+            &community_token.token_mint,
+            &config.token_owner.pubkey(),
+            &mut create_account_instructions,
+            &mut total_rent_free_balances,
+        );
+    
+    create_account_signers.push(config.fee_payer.as_ref());
+    create_account_signers.push(config.token_owner.as_ref());
+    unique_signers!(create_account_signers);
+
+    if !create_account_instructions.is_empty() {
+        let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+        let message = Message::new_with_blockhash(
+            &create_account_instructions,
+            Some(&config.fee_payer.pubkey()),
+            &recent_blockhash,
+        );
+        check_fee_payer_balance(
+            config,
+            total_rent_free_balances + config.rpc_client.get_fee_for_message(&message)?,
+        )?;
+        let transaction = Transaction::new(&create_account_signers, message, recent_blockhash);
+        send_transaction(config, transaction)?;
+    }
+
+    let referrer_token_account = referrer_token_account.unwrap_or(pool_token_receiver_account);
+
+    let pool_withdraw_authority =
+        find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+    let mut signers = if let Some(stake_deposit_authority) = config.funding_authority.as_ref() {
+        if stake_deposit_authority.pubkey() != stake_pool.stake_deposit_authority {
+            let error = format!(
+                "Invalid deposit authority specified, expected {}, received {}",
+                stake_pool.stake_deposit_authority,
+                stake_deposit_authority.pubkey()
+            );
+            return Err(error.into());
+        }
+
+        vec![
+            config.fee_payer.as_ref(),
+            withdraw_authority.as_ref(),
+            stake_deposit_authority.as_ref(),
+        ]
+    } else {
+        vec![config.fee_payer.as_ref(), withdraw_authority.as_ref()]
+    };
+    signers.push(config.token_owner.as_ref());
+    unique_signers!(signers);
+
+    for stake_address in stake_addresses {
+        let stake_state = get_stake_state(&config.rpc_client, &stake_address)?;
+
+        let vote_account = match stake_state {
+            stake::state::StakeState::Stake(_, stake) => Ok(stake.delegation.voter_pubkey),
+            _ => Err("Wrong stake account state, must be delegated to validator"),
+        }?;
+
+        if !validator_list.contains(&vote_account) {
+            return Err("Stake account for this validator does not exist in the pool.".into());
+        }
+
+        // Calculate validator stake account address linked to the pool
+        let (validator_stake_account, _) =
+            find_stake_program_address(&spl_stake_pool::id(), &vote_account, stake_pool_address);
+
+        let validator_stake_state = get_stake_state(&config.rpc_client, &validator_stake_account)?;
+        println!("Depositing user stake {}: {:?}", stake_address, stake_state);
+        println!(
+            "..into pool stake {}: {:?}",
+            validator_stake_account, validator_stake_state
+        );
+
+        let instructions = if let Some(stake_deposit_authority) = config.funding_authority.as_ref()
+        {
+            spl_stake_pool::instruction::dao_strategy_deposit_stake_with_authority(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &stake_pool.validator_list,
+                &stake_deposit_authority.pubkey(),
+                &pool_withdraw_authority,
+                &stake_address,
+                &withdraw_authority.pubkey(),
+                &validator_stake_account,
+                &stake_pool.reserve_stake,
+                &pool_token_receiver_account,
+                &stake_pool.manager_fee_account,
+                &referrer_token_account,
+                &stake_pool.pool_mint,
+                &spl_token::id(),
+                &dao_community_token_receiver_account,
+                &community_token_staking_rewards_dto_pubkey,
+                &config.token_owner.pubkey(),
+                &community_token_dto_pubkey
+            )
+        } else {
+            spl_stake_pool::instruction::dao_strategy_deposit_stake(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &stake_pool.validator_list,
+                &pool_withdraw_authority,
+                &stake_address,
+                &withdraw_authority.pubkey(),
+                &validator_stake_account,
+                &stake_pool.reserve_stake,
+                &pool_token_receiver_account,
+                &stake_pool.manager_fee_account,
+                &referrer_token_account,
+                &stake_pool.pool_mint,
+                &spl_token::id(),
+                &dao_community_token_receiver_account,
+                &community_token_staking_rewards_dto_pubkey,
+                &config.token_owner.pubkey(),
+                &community_token_dto_pubkey
             )
         };
 
@@ -4303,6 +4695,100 @@ fn main() {
                           Defaults to the token receiver."),
             )
         )
+        .subcommand(SubCommand::with_name("dao-strategy-deposit-stake")
+            .about("Deposit active stake account into the stake pool in exchange for pool tokens with existing DAO`s community tokens strategy.")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+            .arg(
+                Arg::with_name("stake_account")
+                    .index(2)
+                    .validator(is_pubkey)
+                    .value_name("STAKE_ACCOUNT_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake address to join the pool"),
+            )
+            .arg(
+                Arg::with_name("withdraw_authority")
+                    .long("withdraw-authority")
+                    .validator(is_valid_signer)
+                    .value_name("KEYPAIR")
+                    .takes_value(true)
+                    .help("Withdraw authority for the stake account to be deposited. [default: cli config keypair]"),
+            )
+            .arg(
+                Arg::with_name("token_receiver")
+                    .long("token-receiver")
+                    .validator(is_pubkey)
+                    .value_name("ADDRESS")
+                    .takes_value(true)
+                    .help("Account to receive the minted pool tokens. \
+                          Defaults to the token-owner's associated pool token account. \
+                          Creates the account if it does not exist."),
+            )
+            .arg(
+                Arg::with_name("referrer")
+                    .validator(is_pubkey)
+                    .value_name("ADDRESS")
+                    .takes_value(true)
+                    .help("Pool token account to receive the referral fees for deposits. \
+                          Defaults to the token receiver."),
+            )
+        )
+        .subcommand(SubCommand::with_name("dao-strategy-deposit-all-stake")
+        .about("Deposit all active stake accounts into the stake pool in exchange for pool tokens with existing DAO`s community tokens strategy")
+        .arg(
+            Arg::with_name("pool")
+                .index(1)
+                .validator(is_pubkey)
+                .value_name("POOL_ADDRESS")
+                .takes_value(true)
+                .required(true)
+                .help("Stake pool address"),
+        )
+        .arg(
+            Arg::with_name("stake_authority")
+                .index(2)
+                .validator(is_pubkey)
+                .value_name("ADDRESS")
+                .takes_value(true)
+                .required(true)
+                .help("Stake authority address to search for stake accounts"),
+        )
+        .arg(
+            Arg::with_name("withdraw_authority")
+                .long("withdraw-authority")
+                .validator(is_valid_signer)
+                .value_name("KEYPAIR")
+                .takes_value(true)
+                .help("Withdraw authority for the stake account to be deposited. [default: cli config keypair]"),
+        )
+        .arg(
+            Arg::with_name("token_receiver")
+                .long("token-receiver")
+                .validator(is_pubkey)
+                .value_name("ADDRESS")
+                .takes_value(true)
+                .help("Account to receive the minted pool tokens. \
+                      Defaults to the token-owner's associated pool token account. \
+                      Creates the account if it does not exist."),
+        )
+        .arg(
+            Arg::with_name("referrer")
+                .validator(is_pubkey)
+                .value_name("ADDRESS")
+                .takes_value(true)
+                .help("Pool token account to receive the referral fees for deposits. \
+                      Defaults to the token receiver."),
+        )
+    )
         .subcommand(SubCommand::with_name("dao-strategy-withdraw-sol")
             .about("Withdraw SOL from the stake pool's reserve in exchange for pool tokens with existing DAO`s community tokens strategy")
             .arg(
@@ -4780,6 +5266,52 @@ fn main() {
                 &pool_token_receiver,
                 &referrer,
                 amount,
+            )
+        }
+        ("dao-strategy-deposit-stake", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let stake_account = pubkey_of(arg_matches, "stake_account").unwrap();
+            let token_receiver: Option<Pubkey> = pubkey_of(arg_matches, "token_receiver");
+            let referrer: Option<Pubkey> = pubkey_of(arg_matches, "referrer");
+            let withdraw_authority = get_signer(
+                arg_matches,
+                "withdraw_authority",
+                &cli_config.keypair_path,
+                &mut wallet_manager,
+                SignerFromPathConfig {
+                    allow_null_signer: false,
+                },
+            );
+            command_dao_strategy_deposit_stake(
+                &config,
+                &stake_pool_address,
+                &stake_account,
+                withdraw_authority,
+                &token_receiver,
+                &referrer,
+            )
+        }
+        ("dao-strategy-deposit-all-stake", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let stake_authority = pubkey_of(arg_matches, "stake_authority").unwrap();
+            let token_receiver: Option<Pubkey> = pubkey_of(arg_matches, "token_receiver");
+            let referrer: Option<Pubkey> = pubkey_of(arg_matches, "referrer");
+            let withdraw_authority = get_signer(
+                arg_matches,
+                "withdraw_authority",
+                &cli_config.keypair_path,
+                &mut wallet_manager,
+                SignerFromPathConfig {
+                    allow_null_signer: false,
+                },
+            );
+            command_dao_strategy_deposit_all_stake(
+                &config,
+                &stake_pool_address,
+                &stake_authority,
+                withdraw_authority,
+                &token_receiver,
+                &referrer,
             )
         }
         ("dao-strategy-withdraw-sol", Some(arg_matches)) => {
