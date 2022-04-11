@@ -909,7 +909,7 @@ impl SimplePda for DaoState {
 
 /// Account type. Needed to find from the network. Quantity of variants must be less than or equal 256. (1 byte)
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
-pub enum PdaAccountType {
+pub enum NetworkAccountType {
     /// If the account has not been initialized, the enum will be 0
     Uninitialized,
     /// Account for CommunityTokenStakingRewards dto
@@ -921,20 +921,22 @@ pub enum PdaAccountType {
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct CommunityTokenStakingRewards {
     /// Account type. Needed to find from the network
-    pub pda_account_type: PdaAccountType,
+    network_account_type: NetworkAccountType,
+    /// value for determaning concrete group of account
+    account_group: AccountGroup,
     /// Programm id. Needed to find from the network
-    pub program_id: Pubkey,
+    program_id: Pubkey,
     /// Stakr pool address. Needed to find from the network
-    pub stake_pool_address: Pubkey,
+    stake_pool_address: Pubkey,
     /// Owner wallet
-    pub owner_wallet: Pubkey,
+    owner_wallet: Pubkey,
     /// The epoch in wich a person staked or changed the stake
-    pub initial_staking_epoch: u64,
+    initial_staking_epoch: u64,
 }
 
 impl CommunityTokenStakingRewards {
     /// Seed prefix for PDA
-    pub const SEED_PREFIX: &'static [u8] = b"community_token_staking_rewards";
+    pub const SEED_PREFIX: &'static [u8] = b"c_t_staking_rewards";
     /// Find PDA 
     pub fn find_address(
         program_id: &Pubkey,
@@ -950,6 +952,109 @@ impl CommunityTokenStakingRewards {
             ],
             program_id
         )
+    }
+
+    /// Constructor
+    pub fn new(
+        community_token_staking_rewards_counter: &mut CommunityTokenStakingRewardsCounter,
+        network_account_type: NetworkAccountType,
+        program_id: Pubkey,
+        stake_pool_address: Pubkey,
+        owner_wallet: Pubkey,
+        initial_staking_epoch: u64,
+    ) -> Self {
+        return Self {
+            network_account_type,
+            account_group: community_token_staking_rewards_counter.calculate_account_group(),
+            program_id,
+            stake_pool_address,
+            owner_wallet,
+            initial_staking_epoch
+        }
+    }
+
+    /// Update initial_staking_epoch
+    pub fn set_initial_staking_epoch(&mut self, epoch: u64) {
+        self.initial_staking_epoch = epoch;
+    }
+
+    /// Owner wallet getter
+    pub fn get_owner_wallet(&self) -> &Pubkey {
+        return &self.owner_wallet;
+    }
+
+    /// Initial staking epoch getter
+    pub fn get_initial_staking_epoch(&self) -> u64 {
+        return self.initial_staking_epoch
+    }
+}
+
+/// Initialized information for requesting CommunityTokenStakingRewards accounts from network
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct CommunityTokenStakingRewardsCounter {
+    /// value for determaning concrete group of account
+    account_group: AccountGroup,
+    /// value for determaning account quantity in the one group
+    counter_for_group: u16
+}
+impl CommunityTokenStakingRewardsCounter {
+    /// Maximum quantity of account for requesting from the network at one time
+    const MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP: u8 = 100;
+    /// Seed prefix for PDA
+    const SEED_PREFIX: &'static [u8] = b"c_t_staking_rewards_counter";
+    /// Initial value for account group
+    pub const ACCOUNT_GROUP_INITIAL_VALUE: u64 = 1;
+
+    /// constructor
+    pub fn new() -> Self {
+        return Self {
+            account_group: AccountGroup::new(Self::ACCOUNT_GROUP_INITIAL_VALUE),
+            counter_for_group: 0
+        }
+    }
+
+    /// Get calculated account group
+    pub fn calculate_account_group(&mut self) -> AccountGroup {
+        if (self.counter_for_group + 1) > (Self::MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP as u16) {
+            self.account_group = AccountGroup::new(self.account_group.value + 1);
+            self.counter_for_group = 1;
+        } else {
+            self.counter_for_group = self.counter_for_group + 1;
+        }
+
+        return self.account_group.clone();
+    }
+
+    /// AccountGroup Getter
+    pub fn get_account(&self) -> &AccountGroup {
+        return &self.account_group;
+    }
+}
+impl SimplePda for CommunityTokenStakingRewardsCounter {
+    fn get_seed_prefix() -> &'static [u8] {
+        return Self::SEED_PREFIX;
+    }
+}
+
+/// Initialized information for determaning account group
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct AccountGroup {
+    /// value
+    value: u64
+}
+impl AccountGroup {
+        /// Constructor
+        pub fn new(value: u64) -> Self {
+            return Self {
+                value
+            }
+        }
+
+    /// Value getter
+    pub fn get_value(&self) -> u64 {
+        return self.value;
     }
 }
 

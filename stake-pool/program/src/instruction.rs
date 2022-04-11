@@ -410,8 +410,8 @@ pub enum StakePoolInstruction {
     ///   1. `[s]` Manager
     ///   2. `[w]` Account storing community token dto
     ///   3. `[w]` Account storing dao state dto
-    ///   4  `[]` Rent sysvar
-    ///   5  `[]` System program account
+    ///   4.  `[]` Rent sysvar
+    ///   5.  `[]` System program account
     CreateCommunityToken {
         ///   Community token`s mint adress
         #[allow(dead_code)] // but it's not
@@ -422,8 +422,8 @@ pub enum StakePoolInstruction {
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[w]` Account storing dao state dto
-    ///   3  `[]` Rent sysvar
-    ///   4  `[]` System program account
+    ///   3. `[]` Rent sysvar
+    ///   4. `[]` System program account
     CreateDaoState {
         /// Is DAO enabled for StakePool
         #[allow(dead_code)] // but it's not
@@ -434,8 +434,9 @@ pub enum StakePoolInstruction {
     ///   0. `[]` Stake pool
     ///   1. `[s]` Owner wallet
     ///   2. `[w]` Account storing community token staking rewards dto
-    ///   3. `[]` Rent sysvar
-    ///   4  `[]` System program account
+    ///   3. `[w]` account for storing counter for community token staking rewards accounts
+    ///   4. `[]` Rent sysvar
+    ///   5. `[]` System program account
     CreateCommunityTokenStakingRewards,
 
     ///   Deposit SOL directly into the pool's reserve account with existing DAO`s community tokens strategy. The output is a "pool" token
@@ -454,7 +455,7 @@ pub enum StakePoolInstruction {
     ///  10. `[]` Token program id
     ///  11. `[w]` Account for storing community token staking rewards dto
     ///  12. `[s]` Owner wallet
-    ///  13  `[]` Account for storing community token dto
+    ///  13. `[]` Account for storing community token dto
     ///  14. `[s]` (Optional) Stake pool sol deposit authority.
     DaoStrategyDepositSol(u64),
 
@@ -511,10 +512,10 @@ pub enum StakePoolInstruction {
     ///  10. `[]` Sysvar clock account (required)
     ///  11. `[]` Pool token program id
     ///  12. `[]` Stake program id,
-    ///  13  `[]` User account to hold DAO`s community tokens
-    ///  14  `[w]` Account for storing community token staking rewards dto
+    ///  13. `[]` User account to hold DAO`s community tokens
+    ///  14. `[w]` Account for storing community token staking rewards dto
     ///  15. `[s]` Owner wallet
-    ///  16  `[]` Account for storing community token dto
+    ///  16. `[]` Account for storing community token dto
     /// 
     ///  userdata: amount of pool tokens to withdraw
     DaoStrategyWithdrawStake(u64),
@@ -532,16 +533,38 @@ pub enum StakePoolInstruction {
     ///   7. `[w]` User account to receive pool tokens
     ///   8. `[w]` Account to receive pool fee tokens
     ///   9. `[w]` Account to receive a portion of pool fee tokens as referral fees
-    ///   10. `[w]` Pool token mint account
-    ///   11. '[]' Sysvar clock account
-    ///   12. '[]' Sysvar stake history account
-    ///   13. `[]` Pool token program id,
-    ///   14. `[]` Stake program id,
-    ///   15  `[]` User account to hold DAO`s community tokens
-    ///   16  `[w]` Account for storing community token staking rewards dto
-    ///   17. `[s]` Owner wallet
-    ///   18  `[]` Account for storing community token dto
+    ///  10. `[w]` Pool token mint account
+    ///  11. '[]' Sysvar clock account
+    ///  12. '[]' Sysvar stake history account
+    ///  13. `[]` Pool token program id,
+    ///  14. `[]` Stake program id,
+    ///  15. `[]` User account to hold DAO`s community tokens
+    ///  16. `[w]` Account for storing community token staking rewards dto
+    ///  17. `[s]` Owner wallet
+    ///  18. `[]` Account for storing community token dto
     DaoStrategyDepositStake,
+
+    ///   Create account for storing counter for community token staking rewards accounts
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Account for storing counter for community token staking rewards accounts
+    ///   3. `[]`  Account for storing community token dto
+    ///   4. `[]` Rent sysvar
+    ///   5. `[]` System program account
+    CreateCommunityTokenStakingRewardsCounter,
+
+    ///   Mints community tokens
+    ///
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[]` User wallet
+    ///   3. `[]` Stake pool withdraw authority
+    ///   4. `[w]` User account to receive pool tokens
+    ///   5. `[w]` Community token mint account
+    ///   6. `[]`  Account for storing community token dto
+    ///   7. `[]` System program account
+    ///   8. `[]` Token program id
+    MintCommunityToken(u64),
 }
 
 /// Creates an 'initialize' instruction.
@@ -1629,11 +1652,13 @@ pub fn create_community_token_staking_rewards(
     stake_pool: &Pubkey,
     owner_wallet: &Pubkey,
     community_token_staking_rewards_dto: &Pubkey,
+    community_token_staking_rewards_counter_dto: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
         AccountMeta::new_readonly(*owner_wallet, true),
         AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new(*community_token_staking_rewards_counter_dto, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
     ]; 
@@ -1646,7 +1671,6 @@ pub fn create_community_token_staking_rewards(
             .unwrap(),
     }
 }
-
 
 /// Creates instructions required to deposit SOL directly into a stake pool with existing DAO`s community tokens strategy.
 pub fn dao_strategy_deposit_sol(
@@ -2012,4 +2036,63 @@ pub fn dao_strategy_deposit_stake_with_authority(
             data: StakePoolInstruction::DaoStrategyDepositStake.try_to_vec().unwrap(),
         },
     ]
+}
+
+/// Creates instruction required to create account for storing counter for community token staking rewards accounts
+pub fn create_community_token_staking_rewards_counter(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    community_token_staking_rewards_counter_dto: &Pubkey,
+    community_token_dto: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*community_token_staking_rewards_counter_dto, false),
+        AccountMeta::new_readonly(*community_token_dto, false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::CreateCommunityTokenStakingRewardsCounter
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instructions required to deposit SOL directly into a stake pool.
+pub fn mint_community_token(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    user_wallet: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    dao_community_token_mint: &Pubkey,
+    community_token_dto: &Pubkey,
+    token_program_id: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new_readonly(*user_wallet, false),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*dao_community_tokens_to, false),
+        AccountMeta::new(*dao_community_token_mint, false),
+        AccountMeta::new_readonly(*community_token_dto, false),
+        AccountMeta::new_readonly(system_program::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::MintCommunityToken(amount)
+            .try_to_vec()
+            .unwrap(),
+    }
 }

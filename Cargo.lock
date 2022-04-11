@@ -3972,9 +3972,11 @@ dependencies = [
 name = "spl-stake-pool-cli"
 version = "0.6.4"
 dependencies = [
+ "base64 0.13.0",
  "bincode",
  "borsh",
  "bs58",
+ "bytes",
  "clap",
  "reqwest",
  "serde",
