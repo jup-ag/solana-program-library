@@ -932,6 +932,8 @@ pub struct CommunityTokenStakingRewards {
     owner_wallet: Pubkey,
     /// The epoch in wich a person staked or changed the stake
     initial_staking_epoch: u64,
+    /// The epoch in wich a person receive rewards in community tokens at last time
+    last_rewarded_epoch: u64,
 }
 
 impl CommunityTokenStakingRewards {
@@ -962,6 +964,7 @@ impl CommunityTokenStakingRewards {
         stake_pool_address: Pubkey,
         owner_wallet: Pubkey,
         initial_staking_epoch: u64,
+        last_rewarded_epoch: u64,
     ) -> Self {
         return Self {
             network_account_type,
@@ -969,7 +972,8 @@ impl CommunityTokenStakingRewards {
             program_id,
             stake_pool_address,
             owner_wallet,
-            initial_staking_epoch
+            initial_staking_epoch,
+            last_rewarded_epoch
         }
     }
 

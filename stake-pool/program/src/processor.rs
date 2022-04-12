@@ -3147,6 +3147,7 @@ impl Processor {
             program_id.clone(),
             stake_pool_info.key.clone(),
             owner_wallet_info.key.clone(),
+            epoch,
             epoch
         );
 
