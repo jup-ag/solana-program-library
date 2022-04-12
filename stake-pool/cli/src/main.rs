@@ -3991,65 +3991,6 @@ fn command_dao_strategy_distribute_community_tokens(
     Ok(())
 }
 
-fn commande_XXX_create_community_token_staking_rewards_counter(
-    config: &Config,
-    stake_pool_address: &Pubkey,
-    from: &Option<Keypair>,
-) -> CommandResult {
-    let community_token_dto_pubkey = CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-
-    let community_token_staking_rewards_counter_dto_pubkey = CommunityTokenStakingRewardsCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-
-    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let dao_state_dto_account = config
-        .rpc_client
-        .get_account(&dao_state_dto_pubkey)?;
-    let dao_state = try_from_slice_unchecked::<DaoState>(dao_state_dto_account.data.as_slice())?;
-    if !dao_state.is_enabled {
-        return Err("Logic error: DAO is not enabled for the pool yet. You should enable it firstly.".into());
-    }
-
-    let community_token_staking_rewards_counter_dto_length = get_packed_len::<CommunityTokenStakingRewardsCounter>();
-    let rent_exemption_for_community_token_staking_rewards_counter_dto_account = config
-    .rpc_client
-    .get_minimum_balance_for_rent_exemption(community_token_staking_rewards_counter_dto_length)?;
-
-    let instructions = vec![
-        spl_stake_pool::instruction::create_community_token_staking_rewards_counter(
-            &spl_stake_pool::id(),
-            stake_pool_address,
-            &config.manager.pubkey(),
-            &community_token_staking_rewards_counter_dto_pubkey,
-            &community_token_dto_pubkey
-        )
-    ];
-
-    let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
-    let message = Message::new_with_blockhash(
-        &instructions,
-        Some(&config.fee_payer.pubkey()),
-        &recent_blockhash,
-    );
-
-    let total_consumption =
-    rent_exemption_for_community_token_staking_rewards_counter_dto_account
-        + config.rpc_client.get_fee_for_message(&message)?;
-    check_fee_payer_balance(
-        config,
-        total_consumption
-    )?;
-
-    let mut signers = vec![
-        config.fee_payer.as_ref(),
-        config.manager.as_ref(),
-    ];
-    unique_signers!(signers);
-
-    send_transaction(config, Transaction::new(&signers, message, recent_blockhash))?;
-
-    Ok(())
-}
-
 fn main() {
     solana_logger::setup_with_default("solana=info");
 
@@ -5222,28 +5163,8 @@ fn main() {
                 .takes_value(true)
                 .required(true)
                 .help("Stake pool address"),
+            )
         )
-    )
-    .subcommand(SubCommand::with_name("create-community-token-staking-rewards-counter")
-    .about("DELETE AFTER EXECUTion")
-    .arg(
-        Arg::with_name("pool")
-            .index(1)
-            .validator(is_pubkey)
-            .value_name("POOL_ADDRESS")
-            .takes_value(true)
-            .required(true)
-            .help("Stake pool address"),
-    )
-    .arg(
-        Arg::with_name("from")
-            .long("from")
-            .validator(is_valid_signer)
-            .value_name("KEYPAIR")
-            .takes_value(true)
-            .help("Source account of funds. [default: cli config keypair]"),
-    )
-)
         .get_matches();
 
     let mut wallet_manager = None;
@@ -5772,11 +5693,6 @@ fn main() {
         ("dao-strategy-distribute-community-tokens", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             command_dao_strategy_distribute_community_tokens(&config, &stake_pool_address)
-        }
-        ("create-community-token-staking-rewards-counter", Some(arg_matches)) => {
-            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            let from = keypair_of(arg_matches, "from");
-            commande_XXX_create_community_token_staking_rewards_counter(&config, &stake_pool_address, &from)
         }
         _ => unreachable!(),
     }
