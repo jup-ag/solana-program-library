@@ -22,6 +22,7 @@ use {
     },
     solana_cli_output::OutputFormat,
     solana_client::rpc_client::RpcClient,
+    solana_client::rpc_request::RpcRequest,
     solana_program::{
         borsh::{get_instance_packed_len, get_packed_len, try_from_slice_unchecked},
         instruction::Instruction,
@@ -3716,59 +3717,6 @@ fn command_create_community_token(
     Ok(())
 }
 
-// DTO for https://docs.solana.com/developing/clients/jsonrpc-api
-#[derive(serde::Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct GetProgramAccountsApiRequest {
-    jsonrpc: &'static str,
-    id: u8,
-    method: &'static str,
-    params: (String, GetProgramAccountsApiRequestParams)
-}
-
-impl GetProgramAccountsApiRequest {
-    pub fn new(method: &'static str, params: (String, GetProgramAccountsApiRequestParams)) -> Self {
-        return Self {
-            jsonrpc: "2.0",
-            id: 1,
-            method,
-            params
-        }
-    }
-}
-
-// DTO for https://docs.solana.com/developing/clients/jsonrpc-api#getprogramaccounts
-#[derive(serde::Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct GetProgramAccountsApiRequestParams {
-    encoding: &'static str,
-    filters: Vec<GetProgramAccountsApiRequestParamsFilter>,
-}
-
-impl GetProgramAccountsApiRequestParams {
-    const ENCODING_TYPE: &'static str = "base64";
-
-    pub fn new(filters: Vec<GetProgramAccountsApiRequestParamsFilter>) -> Self {
-        return Self {
-            encoding: Self::ENCODING_TYPE,
-            filters
-        }
-    }
-}
-
-#[derive(serde::Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct GetProgramAccountsApiRequestParamsFilter {
-    memcmp: GetProgramAccountsApiRequestParamsFilterMemcmp,
-}
-
-#[derive(serde::Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct GetProgramAccountsApiRequestParamsFilterMemcmp {
-    offset: i64,
-    bytes: String,
-}
-
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 /// Structure for searching CommunityTokenStakingRewards accounts by first bytes 
@@ -3777,37 +3725,6 @@ pub struct CommunityTokenStakingRewardsBytes {
     account_group: AccountGroup,
     program_id: Pubkey,
     stake_pool_address: Pubkey,
-}
-
-// DTO for https://docs.solana.com/developing/clients/jsonrpc-api
-#[derive(serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct GetProgramAccountsApiResponse {
-    jsonrpc: String,
-    result: Vec<GetProgramAccountsApiResponseResult>,
-    id: u8,
-}
-
-#[derive(serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct GetProgramAccountsApiResponseResult {
-    account: GetProgramAccountsApiResponseResultAccount,
-    #[allow(dead_code)]
-    pubkey: String,
-}
-
-#[derive(serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct GetProgramAccountsApiResponseResultAccount {
-    data: (String, String),
-    #[allow(dead_code)]
-    executable: bool,
-    #[allow(dead_code)]
-    lamports: u64,
-    #[allow(dead_code)]
-    owner: String,
-    #[allow(dead_code)]
-    rent_epoch: u64,
 }
 
 const MAX_INSTRUCTION_QUANTITY_TO_EXECUTE_AT_ONE_TIME: usize = 5;
@@ -3893,7 +3810,7 @@ fn command_dao_strategy_distribute_community_tokens(
 
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
 
-    let pool_withdraw_authority =find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let pool_withdraw_authority = find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
 
     let mut instructions: Vec<Instruction> = vec![]; 
     let signers = vec![
@@ -3910,34 +3827,27 @@ fn command_dao_strategy_distribute_community_tokens(
             stake_pool_address: stake_pool_address.clone()
         }.try_to_vec()?;
     
-        let get_programm_accounts_api_request_params = GetProgramAccountsApiRequestParams::new(
-            vec![
-                GetProgramAccountsApiRequestParamsFilter {
-                    memcmp: GetProgramAccountsApiRequestParamsFilterMemcmp {
+        let rpc_programm_account_config = solana_client::rpc_config::RpcProgramAccountsConfig {
+            filters: Some(vec![
+                solana_client::rpc_filter::RpcFilterType::Memcmp(
+                    solana_client::rpc_filter::Memcmp {
                         offset: 0,
-                        bytes: bs58::encode(&bytes[..]).into_string()
+                        bytes: solana_client::rpc_filter::MemcmpEncodedBytes::Base58(bs58::encode(&bytes[..]).into_string()),
+                        encoding: None
                     }
-                }
-            ]
-        );
+                )
+            ]),
+            account_config: solana_client::rpc_config::RpcAccountInfoConfig {
+                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
+                data_slice: None,
+                commitment: None
+            },
+            with_context: None
     
-        let get_programm_accounts_api_request = GetProgramAccountsApiRequest::new(
-            "getProgramAccounts", (spl_stake_pool::id().to_string(), get_programm_accounts_api_request_params)
-        );
-    
-        let response = reqwest::blocking::Client::builder().build()?
-            .post("https://api.testnet.solana.com")                             // TODO динамически
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(serde_json::to_string(&get_programm_accounts_api_request)?)
-            .send()?;
-    
-        let get_programm_accounts_api_response = serde_json::from_slice::<'_, GetProgramAccountsApiResponse>(response.bytes()?.chunk())?;
-        if get_programm_accounts_api_response.jsonrpc != get_programm_accounts_api_request.jsonrpc
-            || get_programm_accounts_api_response.id != get_programm_accounts_api_request.id {
-            return Err("Problem with RPC".into());
-        }
+        };
+        let response = config.rpc_client.get_program_accounts_with_config(&spl_stake_pool::id(), rpc_programm_account_config)?;
 
-        for get_programm_accounts_api_response_result in get_programm_accounts_api_response.result {
+        for (_account_pubkey, account) in response {
             if instructions.len() >= MAX_INSTRUCTION_QUANTITY_TO_EXECUTE_AT_ONE_TIME {
                 let mut transaction = Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
                 let recent_blockhash = config.rpc_client.get_recent_blockhash()?.0;
@@ -3947,20 +3857,7 @@ fn command_dao_strategy_distribute_community_tokens(
                 instructions.clear();
             }
 
-            if get_programm_accounts_api_response_result.account.data.1 != GetProgramAccountsApiRequestParams::ENCODING_TYPE {
-                return Err(
-                    format!(
-                        "Invalid encoding type. Expected: {}. Received: {}",
-                        GetProgramAccountsApiRequestParams::ENCODING_TYPE ,
-                        get_programm_accounts_api_response_result.account.data.1
-                    )
-                    .into()
-                );
-            }
-
-            let community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(         // TODOTODO TODO TODO ВАРиант ДЕкодинга
-                &base64::decode(get_programm_accounts_api_response_result.account.data.0)?[..]
-            )?;
+            let community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&account.data[..])?;
 
             if let Some(amount) = get_amount_of_community_tokens_by_dao_tokenomics(config, &community_token_staking_rewards, &stake_pool.pool_mint, current_epoch)? {
                 instructions.push(
