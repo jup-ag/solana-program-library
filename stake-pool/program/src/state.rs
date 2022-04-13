@@ -1010,7 +1010,7 @@ impl CommunityTokenStakingRewardsCounter {
     /// Initial value for account group
     pub const ACCOUNT_GROUP_INITIAL_VALUE: u64 = 1;
 
-    /// constructor
+    /// Constructor
     pub fn new() -> Self {
         return Self {
             account_group: AccountGroup::new(Self::ACCOUNT_GROUP_INITIAL_VALUE),
@@ -1030,9 +1030,23 @@ impl CommunityTokenStakingRewardsCounter {
         return self.account_group.clone();
     }
 
-    /// AccountGroup Getter
+    /// account_group getter
     pub fn get_account(&self) -> &AccountGroup {
-        return &self.account_group;
+        &self.account_group
+    }
+
+    /// counter_for_group getter
+    pub fn get_counter(&self) -> u16 {
+        self.counter_for_group
+    }
+
+    ///Get the total number of accounts
+    pub fn get_number_of_accounts(&self) -> u64 {
+        self.get_counter() as u64 + self
+            .get_account()
+            .get_value()
+            .checked_sub(1)
+            .map_or(0, |num| num * Self::MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP as u64)
     }
 }
 impl SimplePda for CommunityTokenStakingRewardsCounter {

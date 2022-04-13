@@ -166,9 +166,6 @@ impl VerboseDisplay for CliStakePool {
             "SOL Deposit Referral Fee: {}% of SOL Deposit Fee",
             &self.sol_referral_fee
         )?;
-        writeln!(w)?;
-        writeln!(w, "Stake Accounts")?;
-        writeln!(w, "--------------")?;
         match &self.details {
             None => {}
             Some(details) => {
@@ -235,6 +232,39 @@ impl Display for CliStakePool {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CliDaoDetails {
+    pub community_token: String,
+    pub ct_staking_reward_group: u64,
+    pub ct_staking_reward_counter: u16,
+    pub ct_staking_reward_accounts_num: u64,
+}
+
+impl From<(String, (u64, u16, u64))> for CliDaoDetails {
+    fn from (args: (String, (u64, u16, u64))) -> Self {
+        let (community_token, (ct_staking_reward_group, ct_staking_reward_counter, ct_staking_reward_accounts_num)) = args;
+        Self { community_token, ct_staking_reward_group, ct_staking_reward_counter, ct_staking_reward_accounts_num }
+    }
+}
+
+impl Display for CliDaoDetails {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        VerboseDisplay::write_str(self, f)?;
+        Ok(())
+    }    
+}
+impl QuietDisplay for CliDaoDetails {}
+impl VerboseDisplay for CliDaoDetails {
+    fn write_str(&self, w: &mut dyn Write) -> Result {
+        writeln!(w, "Community Token Mint: {}", &self.community_token,)?;
+        writeln!(w, "Community Token Staking Rewards Group: {}", &self.ct_staking_reward_group,)?;
+        writeln!(w, "Community Token Staking Rewards Group Counter: {}", &self.ct_staking_reward_counter,)?;
+        writeln!(w, "Community Token Staking Rewards Accounts Number: {}", &self.ct_staking_reward_accounts_num,)?;
+        Ok(())
+    }    
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CliStakePoolDetails {
@@ -248,6 +278,7 @@ pub(crate) struct CliStakePoolDetails {
     pub current_number_of_validators: u32,
     pub max_number_of_validators: u32,
     pub update_required: bool,
+    pub dao_details: Option<CliDaoDetails>,
 }
 
 impl Display for CliStakePoolDetails {
@@ -347,6 +378,18 @@ impl VerboseDisplay for CliStakePoolDetails {
             "Max Number of Validators: {}",
             &self.max_number_of_validators,
         )?;
+
+        writeln!(w)?;
+        writeln!(w, "DAO Info")?;
+        writeln!(w, "--------------")?;
+
+        match &self.dao_details {
+            None => {  writeln!(w, "DAO State: Disabled")? }
+            Some(details) => {
+                writeln!(w, "DAO state: Enabled")?;
+                VerboseDisplay::write_str(details, w)?;
+            }
+        }
         Ok(())
     }
 }
