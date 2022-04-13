@@ -4,7 +4,7 @@ mod output;
 use {
     crate::{
         client::*,
-        output::{CliStakePool, CliStakePoolDetails, CliStakePoolStakeAccountInfo, CliStakePools},
+        output::{CliStakePool, CliStakePoolDetails, CliDaoDetails, CliStakePoolStakeAccountInfo, CliStakePools},
     },
     clap::{
         crate_description, crate_name, crate_version, value_t, value_t_or_exit, App, AppSettings,
@@ -1965,10 +1965,21 @@ fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
             }
         })
         .collect();
+
     let total_pool_tokens =
         spl_token::amount_to_ui_amount(stake_pool.pool_token_supply, pool_mint.decimals);
 
     let total_liquidity_lamports = stake_pool.total_lamports_liquidity;
+
+
+    let mut dao_details = None;
+    let dao_state = get_dao_state(&config.rpc_client, stake_pool_address).unwrap_or_default();  
+    if dao_state {
+        dao_details = Some(CliDaoDetails::from((
+            get_community_token(&config.rpc_client, stake_pool_address)?.to_string(),
+            get_community_token_staking_rewards_counter(&config.rpc_client, stake_pool_address)?,          
+        )));
+    }
 
     let mut cli_stake_pool = CliStakePool::from((
         *stake_pool_address,
@@ -1988,6 +1999,7 @@ fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
         current_number_of_validators: current_number_of_validators as u32,
         max_number_of_validators,
         update_required,
+        dao_details,
     };
     cli_stake_pool.details = Some(cli_stake_pool_details);
     println!("{}", config.output_format.formatted_string(&cli_stake_pool));

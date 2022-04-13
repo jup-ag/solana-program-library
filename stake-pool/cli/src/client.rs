@@ -10,7 +10,7 @@ use {
     solana_program::{borsh::try_from_slice_unchecked, program_pack::Pack, pubkey::Pubkey, stake},
     spl_stake_pool::{
         find_withdraw_authority_program_address,
-        state::{StakePool, ValidatorList},
+        state::{StakePool, ValidatorList, SimplePda, DaoState, CommunityToken, CommunityTokenStakingRewardsCounter},
     },
     std::collections::HashSet,
 };
@@ -149,4 +149,47 @@ pub(crate) fn get_all_stake(
         .into_iter()
         .map(|(address, _)| address)
         .collect())
+}
+
+pub(crate) fn get_dao_state(
+    rpc_client: &RpcClient,
+    stake_pool_address: &Pubkey,
+) -> Result<bool, ClientError> {
+    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let dao_state_dto_account_data = rpc_client
+        .get_account_data(&dao_state_dto_pubkey)?;
+
+    let dao_state = try_from_slice_unchecked::<DaoState>(dao_state_dto_account_data.as_slice())?;
+    Ok(dao_state.is_enabled)
+}
+
+pub(crate) fn get_community_token(
+    rpc_client: &RpcClient,
+    stake_pool_address: &Pubkey,
+) -> Result<Pubkey, ClientError> {
+    let ct_dto_pubkey = CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let ct_dto_account_data = rpc_client
+        .get_account_data(&ct_dto_pubkey)?;
+
+    let ct = try_from_slice_unchecked::<CommunityToken>(ct_dto_account_data.as_slice())?;
+    Ok(ct.token_mint)
+}
+
+/// Return the following info taken from CommunityTokenStakingRewardsCounter struct
+/// (group account value, group counter, total number of group accounts)
+pub(crate) fn get_community_token_staking_rewards_counter(
+    rpc_client: &RpcClient,
+    stake_pool_address: &Pubkey,
+) -> Result<(u64,u16,u64), ClientError> {
+    let cnt_dto_pubkey = CommunityTokenStakingRewardsCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let cnt_dto_account_data = rpc_client
+        .get_account_data(&cnt_dto_pubkey)?;
+
+    let counter = try_from_slice_unchecked::<CommunityTokenStakingRewardsCounter>(cnt_dto_account_data.as_slice())?;
+
+    Ok((
+        counter.get_account().get_value(),
+        counter.get_counter(),
+        counter.get_number_of_accounts(),
+    ))
 }
