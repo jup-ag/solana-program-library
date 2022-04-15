@@ -150,6 +150,9 @@ pub enum StakePoolError {
     /// Data exists in account, but should not exists. It is mean account exist
     #[error("DataAlreasyExists")]
     DataAlreadyExists,
+    /// Invalid epoch
+    #[error("InvalidEpoch")]
+    InvalidEpoch,
 }
 impl From<StakePoolError> for ProgramError {
     fn from(e: StakePoolError) -> Self {

@@ -3907,7 +3907,8 @@ fn command_dao_strategy_distribute_community_tokens(
                         &community_token_dto_pubkey,
                         &account_pubkey,
                         &spl_token::id(),
-                        amount
+                        amount,
+                        current_epoch
                     )
                 );
             }

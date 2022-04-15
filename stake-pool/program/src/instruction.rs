@@ -566,7 +566,14 @@ pub enum StakePoolInstruction {
     ///   8. `[]` System program account
     ///   9. `[]` Token program id
     ///  10. `[]` Sysvar clock account (required)
-    MintCommunityToken(u64),
+    MintCommunityToken {
+        /// Community tokens amount
+        #[allow(dead_code)] // but it's not
+        amount: u64,
+        /// Current epoch
+        #[allow(dead_code)] // but it's not
+        current_epoch: u64
+    },
 }
 
 /// Creates an 'initialize' instruction.
@@ -2079,6 +2086,7 @@ pub fn mint_community_token(
     community_token_staking_rewards_dto: &Pubkey,
     token_program_id: &Pubkey,
     amount: u64,
+    current_epoch: u64
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
@@ -2096,7 +2104,10 @@ pub fn mint_community_token(
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::MintCommunityToken(amount)
+        data: StakePoolInstruction::MintCommunityToken {
+            amount,
+            current_epoch
+        }
             .try_to_vec()
             .unwrap(),
     }
