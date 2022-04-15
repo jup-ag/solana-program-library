@@ -3741,9 +3741,9 @@ pub struct CommunityTokenStakingRewardsBytes {
 
 const MAX_INSTRUCTION_QUANTITY_TO_EXECUTE_AT_ONE_TIME: usize = 5;
 
-const AVARAGE_QUANTITY_OF_EPOCH_PER_YEAR: u8 = 123;
+const AVARAGE_QUANTITY_OF_EPOCH_PER_YEAR: u8 = 122;
 
-const GAINING_PARAMETER_PER_EPOCH_INCREASE_VALUE: f64 = 0.03;
+const GAINING_PARAMETER_PER_EPOCH_INCREASE_VALUE: f64 = 0.003;
 
 const QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING: u8 = 3;
 
@@ -3764,27 +3764,50 @@ fn get_amount_of_community_tokens_by_dao_tokenomics(
     }
 
     let pool_tokens_amount = spl_token::ui_amount_to_amount(associated_token_account.token_amount.ui_amount.unwrap(), associated_token_account.token_amount.decimals) as f64;
+    if pool_tokens_amount.floor() as u64 == 0 {
+        return Ok(None);
+    }
 
-    let epoch_quantity = current_epoch - community_token_staking_rewards.get_initial_staking_epoch();
+    let epoch_from_last_rewarding_quantity = current_epoch - community_token_staking_rewards.get_last_rewarded_epoch();
+    if epoch_from_last_rewarding_quantity >= (QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING as u64) {
+        let staking_epoch_quantity = (current_epoch - community_token_staking_rewards.get_initial_staking_epoch()) as f64;
+        let rewarded_epoch_quantity = (community_token_staking_rewards.get_last_rewarded_epoch() - community_token_staking_rewards.get_initial_staking_epoch()) as f64;
+        let two_years_avarage_epoch_quantity = (2 * AVARAGE_QUANTITY_OF_EPOCH_PER_YEAR) as f64 ;
 
-    if (epoch_quantity % (QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING as u64)) == 0
-        && epoch_quantity != 0 {
-        let amount: f64;
+        let total_token_quantity: f64;
+        let already_minted_token_quantity: f64;
 
-        if epoch_quantity <= AVARAGE_QUANTITY_OF_EPOCH_PER_YEAR as u64 {
-            amount = if epoch_quantity - (QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING as u64) !=0 {
-                pool_tokens_amount.sqrt() * (
-                    (epoch_quantity as f64) * ((1 as f64) + ((epoch_quantity - 1) as f64) * GAINING_PARAMETER_PER_EPOCH_INCREASE_VALUE)
-                    - ((epoch_quantity - (QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING as u64)) as f64) * ((1 as f64) + ((epoch_quantity - 1 - (QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING as u64)) as f64) * GAINING_PARAMETER_PER_EPOCH_INCREASE_VALUE)
-                )
-            } else {
-                pool_tokens_amount.sqrt() * (epoch_quantity as f64) * ((1 as f64) + ((epoch_quantity - 1) as f64) * GAINING_PARAMETER_PER_EPOCH_INCREASE_VALUE)
-            };
+        if rewarded_epoch_quantity <= two_years_avarage_epoch_quantity
+            && staking_epoch_quantity <= two_years_avarage_epoch_quantity {
+            total_token_quantity = pool_tokens_amount.sqrt() * staking_epoch_quantity * ((1 as f64) + staking_epoch_quantity * GAINING_PARAMETER_PER_EPOCH_INCREASE_VALUE);
+
+            already_minted_token_quantity = pool_tokens_amount.sqrt() * rewarded_epoch_quantity * ((1 as f64) + rewarded_epoch_quantity * GAINING_PARAMETER_PER_EPOCH_INCREASE_VALUE);
         } else {
-            amount = pool_tokens_amount.sqrt() * 0.75 * (QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING as f64);
+            if rewarded_epoch_quantity <= two_years_avarage_epoch_quantity
+                && staking_epoch_quantity > two_years_avarage_epoch_quantity {
+                total_token_quantity = pool_tokens_amount.sqrt() * (staking_epoch_quantity * 2.45 - 176.656);
+
+                already_minted_token_quantity = pool_tokens_amount.sqrt() * rewarded_epoch_quantity * ((1 as f64) + rewarded_epoch_quantity * GAINING_PARAMETER_PER_EPOCH_INCREASE_VALUE);
+            } else {
+                if rewarded_epoch_quantity > two_years_avarage_epoch_quantity 
+                    && staking_epoch_quantity > two_years_avarage_epoch_quantity {
+                    total_token_quantity = pool_tokens_amount.sqrt() * (staking_epoch_quantity * 2.45 - 176.656);
+
+                    already_minted_token_quantity = pool_tokens_amount.sqrt() * (rewarded_epoch_quantity * 2.45 - 176.656);
+                } else {
+                    return Err("Logic error. The rewarded_epoch_quantity should be less than staking_epoch_quantity".into());
+                }
+            }
         }
 
-        return Ok(Some(amount.floor() as u64));
+        if total_token_quantity < already_minted_token_quantity {
+            return Err("Logic error. The already_minted_token_quantity should be less than total_token_quantity".into());
+        }
+
+        let will_minted_token_quantity = (total_token_quantity - already_minted_token_quantity).floor() as u64;
+        if will_minted_token_quantity != 0 {
+            return Ok(Some(will_minted_token_quantity));
+        }
     }
 
     return Ok(None);
@@ -3859,7 +3882,7 @@ fn command_dao_strategy_distribute_community_tokens(
         };
         let response = config.rpc_client.get_program_accounts_with_config(&spl_stake_pool::id(), rpc_programm_account_config)?;
 
-        for (_account_pubkey, account) in response {
+        for (account_pubkey, account) in response {
             if instructions.len() >= MAX_INSTRUCTION_QUANTITY_TO_EXECUTE_AT_ONE_TIME {
                 let mut transaction = Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
                 let recent_blockhash = config.rpc_client.get_recent_blockhash()?.0;
@@ -3882,6 +3905,7 @@ fn command_dao_strategy_distribute_community_tokens(
                         &get_associated_token_address(community_token_staking_rewards.get_owner_wallet(), &community_token.token_mint),
                         &community_token.token_mint,
                         &community_token_dto_pubkey,
+                        &account_pubkey,
                         &spl_token::id(),
                         amount
                     )

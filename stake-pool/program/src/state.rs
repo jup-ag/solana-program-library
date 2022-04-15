@@ -982,14 +982,24 @@ impl CommunityTokenStakingRewards {
         self.initial_staking_epoch = epoch;
     }
 
-    /// Owner wallet getter
+    /// Update last_rewarded_epoch
+    pub fn set_last_rewarded_epoch(&mut self, epoch: u64) {
+        self.last_rewarded_epoch = epoch;
+    }
+
+    /// The owner_wallet getter
     pub fn get_owner_wallet(&self) -> &Pubkey {
         return &self.owner_wallet;
     }
 
-    /// Initial staking epoch getter
+    /// The initial_staking_epoch getter
     pub fn get_initial_staking_epoch(&self) -> u64 {
         return self.initial_staking_epoch
+    }
+
+    /// The last_rewarded_epoch getter
+    pub fn get_last_rewarded_epoch(&self) -> u64 {
+        return self.last_rewarded_epoch
     }
 }
 

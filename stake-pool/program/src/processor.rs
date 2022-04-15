@@ -4224,8 +4224,12 @@ impl Processor {
         let dao_community_tokens_to_info = next_account_info(account_info_iter)?;
         let dao_community_token_mint_info = next_account_info(account_info_iter)?;
         let community_token_dto_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
         let system_program_info = next_account_info(account_info_iter)?;
         let token_program_info = next_account_info(account_info_iter)?;
+        let clock_info = next_account_info(account_info_iter)?;
+        
+        let clock = &Clock::from_account_info(clock_info)?;
 
         check_account_owner(stake_pool_info, program_id)?;
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
@@ -4266,7 +4270,19 @@ impl Processor {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
+        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, user_wallet_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_staking_rewards_dto_info.data_is_empty()
+            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
         if amount > 0 {
+            let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+            community_token_staking_rewards.set_last_rewarded_epoch(clock.epoch);
+            community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+
             Self::token_mint_to(
                 stake_pool_info.key,
                 token_program_info.clone(),

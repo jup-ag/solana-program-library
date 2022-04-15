@@ -562,8 +562,10 @@ pub enum StakePoolInstruction {
     ///   4. `[w]` User account to receive pool tokens
     ///   5. `[w]` Community token mint account
     ///   6. `[]`  Account for storing community token dto
-    ///   7. `[]` System program account
-    ///   8. `[]` Token program id
+    ///   7. `[w]` Account for storing community token staking rewards dto
+    ///   8. `[]` System program account
+    ///   9. `[]` Token program id
+    ///  10. `[]` Sysvar clock account (required)
     MintCommunityToken(u64),
 }
 
@@ -2074,6 +2076,7 @@ pub fn mint_community_token(
     dao_community_tokens_to: &Pubkey,
     dao_community_token_mint: &Pubkey,
     community_token_dto: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
     token_program_id: &Pubkey,
     amount: u64,
 ) -> Instruction {
@@ -2085,8 +2088,10 @@ pub fn mint_community_token(
         AccountMeta::new(*dao_community_tokens_to, false),
         AccountMeta::new(*dao_community_token_mint, false),
         AccountMeta::new_readonly(*community_token_dto, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
         AccountMeta::new_readonly(system_program::id(), false),
         AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
     ];
     Instruction {
         program_id: *program_id,
