@@ -111,8 +111,15 @@ pub(crate) fn get_stake_pools(
                                 })
                                 .ok()
                         }
-                        Err(err) => {
-                            eprintln!("Invalid stake pool data for {}: {}", address, err);
+                        Err(_) => {
+                            // We may not want to inform a user about false matches or stale stake pools.
+                            // TODO: come up with a solution to avoid false matches and stale stake pools:
+                            // Some points:
+                            // - Use account type at the beginninng of all program accounts
+                            // - Have an upgradable model, so we can predict size change at some boundaries 
+                            // - Resize stale accounts (not supported by Solana)
+
+                            //eprintln!("Invalid stake pool data for {}: {}", address, err);
                             None
                         }
                     }
