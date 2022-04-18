@@ -3273,6 +3273,7 @@ impl Processor {
 
         let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
         community_token_staking_rewards.set_initial_staking_epoch(epoch);
+        community_token_staking_rewards.set_last_rewarded_epoch(epoch);
         community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         let new_pool_tokens = stake_pool
@@ -3452,6 +3453,7 @@ impl Processor {
 
         let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
         community_token_staking_rewards.set_initial_staking_epoch(epoch);
+        community_token_staking_rewards.set_last_rewarded_epoch(epoch);
         community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
 
@@ -3641,6 +3643,7 @@ impl Processor {
 
         let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
         community_token_staking_rewards.set_initial_staking_epoch(clock.epoch);
+        community_token_staking_rewards.set_last_rewarded_epoch(clock.epoch);
         community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
 
@@ -3949,6 +3952,7 @@ impl Processor {
 
         let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
         community_token_staking_rewards.set_initial_staking_epoch(clock.epoch);
+        community_token_staking_rewards.set_last_rewarded_epoch(clock.epoch);
         community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         let mut validator_stake_info = validator_list
