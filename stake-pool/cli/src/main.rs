@@ -3773,7 +3773,7 @@ fn get_amount_of_community_tokens_by_dao_tokenomics(
     // Number of tokens = sqrt(SOL staked)*number_of_epochs*gaining parameter,  
     // where, gaining parameter = [5100:100:29300], till 244 epoch (~2 years).
     //
-    // Number of tokens = sqrt(SOL staked)*(number_of_epochs*53500-5904800) after 244 epochs.
+    // Number of tokens = sqrt(SOL staked)*(number_of_epochs*53500-5880400) after 244 epochs.
     let epoch_from_last_rewarding_quantity = current_epoch - community_token_staking_rewards.get_last_rewarded_epoch();
     if epoch_from_last_rewarding_quantity >= (QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING as u64) {
         let staking_epoch_quantity = current_epoch - community_token_staking_rewards.get_initial_staking_epoch();
@@ -3791,15 +3791,15 @@ fn get_amount_of_community_tokens_by_dao_tokenomics(
         } else {
             if rewarded_epoch_quantity <= two_years_avarage_epoch_quantity
                 && staking_epoch_quantity > two_years_avarage_epoch_quantity {
-                total_token_quantity = pool_tokens_amount.sqrt() * ((staking_epoch_quantity * 53500 - 5904800) as f64);
+                total_token_quantity = pool_tokens_amount.sqrt() * ((staking_epoch_quantity * 53500 - 5880400) as f64);
 
                 already_minted_token_quantity = pool_tokens_amount.sqrt() * ((rewarded_epoch_quantity * ((GAINING_PARAMETER_INITIALIZE_VALUE as u64) + rewarded_epoch_quantity * (GAINING_PARAMETER_PER_EPOCH_INCREASE_VALUE as u64))) as f64);
             } else {
                 if rewarded_epoch_quantity > two_years_avarage_epoch_quantity 
                     && staking_epoch_quantity > two_years_avarage_epoch_quantity {
-                    total_token_quantity = pool_tokens_amount.sqrt() * ((staking_epoch_quantity * 53500 - 5904800) as f64);
+                    total_token_quantity = pool_tokens_amount.sqrt() * ((staking_epoch_quantity * 53500 - 5880400) as f64);
 
-                    already_minted_token_quantity = pool_tokens_amount.sqrt() * ((rewarded_epoch_quantity * 53500 - 5904800) as f64);
+                    already_minted_token_quantity = pool_tokens_amount.sqrt() * ((rewarded_epoch_quantity * 53500 - 5880400) as f64);
                 } else {
                     return Err("Logic error. The rewarded_epoch_quantity should be less than staking_epoch_quantity".into());
                 }
