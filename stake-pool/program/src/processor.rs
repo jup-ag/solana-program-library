@@ -4307,6 +4307,82 @@ impl Processor {
         Ok(())
     }
 
+    /// DELETE
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_change_state(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let user_wallet_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let dao_community_tokens_to_info = next_account_info(account_info_iter)?;
+        let dao_community_token_mint_info = next_account_info(account_info_iter)?;
+        let community_token_dto_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
+        let system_program_info = next_account_info(account_info_iter)?;
+        let token_program_info = next_account_info(account_info_iter)?;
+        let clock_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+
+        if stake_pool.token_program_id != *token_program_info.key {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+        stake_pool.check_manager(manager_info)?;
+        check_system_program(system_program_info.key)?;
+
+        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_dto_info.data_is_empty()
+            || community_token_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+
+        if *dao_community_token_mint_info.key != community_token.token_mint {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        if *dao_community_tokens_to_info.key != get_associated_token_address(user_wallet_info.key, dao_community_token_mint_info.key) {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if dao_community_tokens_to_info.data_is_empty()
+            || dao_community_tokens_to_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, user_wallet_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_staking_rewards_dto_info.data_is_empty()
+            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        if community_token_staking_rewards.get_last_rewarded_epoch() < community_token_staking_rewards.get_initial_staking_epoch() {
+            community_token_staking_rewards.set_last_rewarded_epoch(community_token_staking_rewards.get_initial_staking_epoch());
+            community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+        }
+
+        Ok(())
+    }
+
+
     /// Processes [Instruction](enum.Instruction.html).
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = StakePoolInstruction::try_from_slice(input)?;
@@ -4477,6 +4553,10 @@ impl Processor {
             } => {
                 msg!("Instruction: MintCommunityToken");
                 Self::process_mint_community_token(program_id, accounts, amount, current_epoch)
+            }
+            StakePoolInstruction::ChangeState => {
+                msg!("Instruction: ChangeState");
+                Self::process_change_state(program_id, accounts)
             }
         }
     }
