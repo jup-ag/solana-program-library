@@ -574,10 +574,6 @@ pub enum StakePoolInstruction {
         #[allow(dead_code)] // but it's not
         current_epoch: u64
     },
-
-
-    /// DELETE
-    ChangeState,
 }
 
 /// Creates an 'initialize' instruction.
@@ -2112,42 +2108,6 @@ pub fn mint_community_token(
             amount,
             current_epoch
         }
-            .try_to_vec()
-            .unwrap(),
-    }
-}
-
-
-/// DELETE
-pub fn change_state(
-    program_id: &Pubkey,
-    stake_pool: &Pubkey,
-    manager: &Pubkey,
-    user_wallet: &Pubkey,
-    stake_pool_withdraw_authority: &Pubkey,
-    dao_community_tokens_to: &Pubkey,
-    dao_community_token_mint: &Pubkey,
-    community_token_dto: &Pubkey,
-    community_token_staking_rewards_dto: &Pubkey,
-    token_program_id: &Pubkey,
-) -> Instruction {
-    let accounts = vec![
-        AccountMeta::new_readonly(*stake_pool, false),
-        AccountMeta::new_readonly(*manager, true),
-        AccountMeta::new_readonly(*user_wallet, false),
-        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
-        AccountMeta::new(*dao_community_tokens_to, false),
-        AccountMeta::new(*dao_community_token_mint, false),
-        AccountMeta::new_readonly(*community_token_dto, false),
-        AccountMeta::new(*community_token_staking_rewards_dto, false),
-        AccountMeta::new_readonly(system_program::id(), false),
-        AccountMeta::new_readonly(*token_program_id, false),
-        AccountMeta::new_readonly(sysvar::clock::id(), false),
-    ];
-    Instruction {
-        program_id: *program_id,
-        accounts,
-        data: StakePoolInstruction::ChangeState
             .try_to_vec()
             .unwrap(),
     }

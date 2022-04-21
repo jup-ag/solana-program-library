@@ -3931,116 +3931,6 @@ fn command_dao_strategy_distribute_community_tokens(
     Ok(())
 }
 
-fn command_change_state(
-    config: &Config,
-    stake_pool_address: &Pubkey,
-) -> CommandResult {
-    if !config.no_update {
-        command_update(config, stake_pool_address, false, false)?;
-    }
-
-    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let dao_state_dto_account = config
-        .rpc_client
-        .get_account(&dao_state_dto_pubkey)?;
-
-    let dao_state = try_from_slice_unchecked::<DaoState>(dao_state_dto_account.data.as_slice())?;
-    if !dao_state.is_enabled {
-        return Err("Logic error: DAO is not enabled for the pool yet. You should enable it firstly.".into());
-    }
-
-    let community_token_dto_pubkey = CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let community_token_dto_account = config
-        .rpc_client
-        .get_account(&community_token_dto_pubkey)?;
-    let community_token = try_from_slice_unchecked::<CommunityToken>(community_token_dto_account.data.as_slice())?;
-
-    let community_token_staking_rewards_counter_dto_pubkey = CommunityTokenStakingRewardsCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let community_token_staking_rewards_counter_dto_account = config
-        .rpc_client
-        .get_account(&community_token_staking_rewards_counter_dto_pubkey)?;
-    let community_token_staking_rewards_counter = try_from_slice_unchecked::<CommunityTokenStakingRewardsCounter>(community_token_staking_rewards_counter_dto_account.data.as_slice())?;
-
-    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-
-    let pool_withdraw_authority = find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
-
-    let mut instructions: Vec<Instruction> = vec![]; 
-    let signers = vec![
-        config.manager.as_ref(),
-    ];
-
-    for current_account_group in CommunityTokenStakingRewardsCounter::ACCOUNT_GROUP_INITIAL_VALUE..=community_token_staking_rewards_counter.get_account().get_value() {
-        let current_epoch = config.rpc_client.get_epoch_info()?.epoch;
-
-        let bytes = CommunityTokenStakingRewardsBytes {
-            network_account_type: NetworkAccountType::CommunityTokenStakingRewards,
-            account_group: AccountGroup::new(current_account_group),
-            program_id: spl_stake_pool::id(),
-            stake_pool_address: stake_pool_address.clone()
-        }.try_to_vec()?;
-    
-        let rpc_programm_account_config = solana_client::rpc_config::RpcProgramAccountsConfig {
-            filters: Some(vec![
-                solana_client::rpc_filter::RpcFilterType::Memcmp(
-                    solana_client::rpc_filter::Memcmp {
-                        offset: 0,
-                        bytes: solana_client::rpc_filter::MemcmpEncodedBytes::Base58(bs58::encode(&bytes[..]).into_string()),
-                        encoding: None
-                    }
-                )
-            ]),
-            account_config: solana_client::rpc_config::RpcAccountInfoConfig {
-                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
-                data_slice: None,
-                commitment: None
-            },
-            with_context: None
-    
-        };
-        let response = config.rpc_client.get_program_accounts_with_config(&spl_stake_pool::id(), rpc_programm_account_config)?;
-
-        for (account_pubkey, account) in response {
-            if instructions.len() >= MAX_INSTRUCTION_QUANTITY_TO_EXECUTE_AT_ONE_TIME {
-                let mut transaction = Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
-                let recent_blockhash = config.rpc_client.get_recent_blockhash()?.0;
-                transaction.sign(&signers, recent_blockhash);
-                send_transaction(config, transaction)?;
-
-                instructions.clear();
-            }
-
-            let community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&account.data[..])?;
-
-            if community_token_staking_rewards.get_initial_staking_epoch() > community_token_staking_rewards.get_last_rewarded_epoch() {
-                instructions.push(
-                    spl_stake_pool::instruction::change_state(
-                        &spl_stake_pool::id(),
-                        &stake_pool_address,
-                        &config.manager.pubkey(),
-                        community_token_staking_rewards.get_owner_wallet(),
-                        &pool_withdraw_authority,
-                        &get_associated_token_address(community_token_staking_rewards.get_owner_wallet(), &community_token.token_mint),
-                        &community_token.token_mint,
-                        &community_token_dto_pubkey,
-                        &account_pubkey,
-                        &spl_token::id(),
-                    )
-                );
-            }
-        }
-    }
-
-    if instructions.len() != 0 {
-        let mut transaction = Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
-        let recent_blockhash = config.rpc_client.get_recent_blockhash()?.0;
-        transaction.sign(&signers, recent_blockhash);
-        send_transaction(config, transaction)?;
-    }
-
-    Ok(())
-}
-
 fn main() {
     solana_logger::setup_with_default("solana=info");
 
@@ -5215,18 +5105,6 @@ fn main() {
                 .help("Stake pool address"),
             )
         )
-        .subcommand(SubCommand::with_name("change-state")
-        .about("Delete after execution")
-        .arg(
-            Arg::with_name("pool")
-                .index(1)
-                .validator(is_pubkey)
-                .value_name("POOL_ADDRESS")
-                .takes_value(true)
-                .required(true)
-                .help("Stake pool address"),
-            )
-        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -5755,10 +5633,6 @@ fn main() {
         ("dao-strategy-distribute-community-tokens", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             command_dao_strategy_distribute_community_tokens(&config, &stake_pool_address)
-        }
-        ("change-state", Some(arg_matches)) => {        // TODO DELETE AFTER EXECUTION
-            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            command_change_state(&config, &stake_pool_address)
         }
         _ => unreachable!(),
     }
