@@ -239,12 +239,14 @@ pub(crate) struct CliDaoDetails {
     pub ct_staking_reward_group: u64,
     pub ct_staking_reward_counter: u16,
     pub ct_staking_reward_accounts_num: u64,
+    pub ct_evs_dao_reserve: f64,
+    pub ct_evs_strategic_reserve: f64,
 }
 
-impl From<(String, (u64, u16, u64))> for CliDaoDetails {
-    fn from (args: (String, (u64, u16, u64))) -> Self {
-        let (community_token, (ct_staking_reward_group, ct_staking_reward_counter, ct_staking_reward_accounts_num)) = args;
-        Self { community_token, ct_staking_reward_group, ct_staking_reward_counter, ct_staking_reward_accounts_num }
+impl From<(String, (u64, u16, u64), (f64, f64))> for CliDaoDetails {
+    fn from (args: (String, (u64, u16, u64), (f64, f64))) -> Self {
+        let (community_token, (ct_staking_reward_group, ct_staking_reward_counter, ct_staking_reward_accounts_num), (ct_evs_dao_reserve, ct_evs_strategic_reserve)) = args;
+        Self { community_token, ct_staking_reward_group, ct_staking_reward_counter, ct_staking_reward_accounts_num,  ct_evs_dao_reserve, ct_evs_strategic_reserve}
     }
 }
 
@@ -261,6 +263,8 @@ impl VerboseDisplay for CliDaoDetails {
         writeln!(w, "Community Token Staking Rewards Group: {}", &self.ct_staking_reward_group,)?;
         writeln!(w, "Community Token Staking Rewards Group Counter: {}", &self.ct_staking_reward_counter,)?;
         writeln!(w, "Community Token Staking Rewards Accounts Number: {}", &self.ct_staking_reward_accounts_num,)?;
+        writeln!(w, "EVS DAO Reserve: {}", &self.ct_evs_dao_reserve,)?;
+        writeln!(w, "EVS Strategic Reserve: {}", &self.ct_evs_strategic_reserve,)?;
         Ok(())
     }    
 }

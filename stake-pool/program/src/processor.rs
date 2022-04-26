@@ -8,7 +8,8 @@ use {
         minimum_reserve_lamports, minimum_stake_lamports,
         state::{
             AccountType, Fee, FeeType, RateOfExchange, StakePool, StakeStatus, ValidatorList,
-            ValidatorListHeader, ValidatorStakeInfo, SimplePda, CommunityToken, DaoState, CommunityTokenStakingRewards, NetworkAccountType, CommunityTokenStakingRewardsCounter
+            ValidatorListHeader, ValidatorStakeInfo, SimplePda, CommunityToken, DaoState, CommunityTokenStakingRewards, 
+            NetworkAccountType, CommunityTokenStakingRewardsCounter, CommunityTokensCounter,
         },
         AUTHORITY_DEPOSIT, AUTHORITY_WITHDRAW, MINIMUM_ACTIVE_STAKE, TRANSIENT_STAKE_SEED_PREFIX,
     },
@@ -3028,6 +3029,166 @@ impl Processor {
         Ok(())
     }
 
+    /// Processes [CreateCommunityTokensCounter](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_create_community_tokens_counter(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let community_tokens_counter_dto_info = next_account_info(account_info_iter)?;
+        let community_token_dto_info = next_account_info(account_info_iter)?;
+        let community_token_mint_info = next_account_info(account_info_iter)?;
+        let rent_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_dto_info.data_is_empty()
+            || community_token_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;       
+
+        if *community_token_mint_info.key != community_token.token_mint {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        let (community_tokens_counter_pubkey, bump_seed) = CommunityTokensCounter::find_address(program_id, stake_pool_info.key);
+        if *community_tokens_counter_dto_info.key != community_tokens_counter_pubkey {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        if !community_tokens_counter_dto_info.data_is_empty() 
+            || community_tokens_counter_dto_info.lamports() != 0 {
+            return Err(StakePoolError::DataAlreadyExists.into());
+        }
+
+        let rent = &Rent::from_account_info(rent_info)?;
+
+        let community_tokens_counter = CommunityTokensCounter::new(0, 0);
+
+        let space = get_instance_packed_len(&community_tokens_counter)?;
+
+        invoke_signed(
+            &system_instruction::create_account(
+                manager_info.key,
+                community_tokens_counter_dto_info.key,
+                rent.minimum_balance(space),
+                space as u64,
+                program_id,
+            ),
+            &[
+                manager_info.clone(),
+                community_tokens_counter_dto_info.clone()
+            ],
+            &[
+                &[
+                    CommunityTokensCounter::get_seed_prefix(),
+                    &stake_pool_info.key.to_bytes()[..],
+                    &program_id.to_bytes()[..],
+                    &[bump_seed],
+                ]
+            ]
+        )?;
+
+        community_tokens_counter.serialize(&mut *community_tokens_counter_dto_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// DELETE after using !!!
+    /// Processes [CreateCommunityTokensCounter](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_patch_community_tokens_counter(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let community_tokens_counter_dto_info = next_account_info(account_info_iter)?;
+        let community_token_dto_info = next_account_info(account_info_iter)?;
+        let community_token_mint_info = next_account_info(account_info_iter)?;
+        let rent_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_dto_info.data_is_empty()
+            || community_token_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;       
+
+        if *community_token_mint_info.key != community_token.token_mint {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        let (community_tokens_counter_pubkey, bump_seed) = CommunityTokensCounter::find_address(program_id, stake_pool_info.key);
+        if *community_tokens_counter_dto_info.key != community_tokens_counter_pubkey {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        let community_token_mint = Mint::unpack_from_slice(&community_token_mint_info.data.borrow())?;
+        let community_tokens_counter = CommunityTokensCounter::new(community_token_mint.supply, 0);
+
+        // create the account if it doesn't exist
+        if community_tokens_counter_dto_info.data_is_empty() 
+            && community_tokens_counter_dto_info.lamports() == 0 
+        {
+            let rent = &Rent::from_account_info(rent_info)?;
+            let space = get_instance_packed_len(&community_tokens_counter)?;
+
+            invoke_signed(
+                &system_instruction::create_account(
+                    manager_info.key,
+                    community_tokens_counter_dto_info.key,
+                    rent.minimum_balance(space),
+                    space as u64,
+                    program_id,
+                ),
+                &[
+                    manager_info.clone(),
+                    community_tokens_counter_dto_info.clone()
+                ],
+                &[
+                    &[
+                        CommunityTokensCounter::get_seed_prefix(),
+                        &stake_pool_info.key.to_bytes()[..],
+                        &program_id.to_bytes()[..],
+                        &[bump_seed],
+                    ]
+                ]
+            )?;
+        }
+        community_tokens_counter.serialize(&mut *community_tokens_counter_dto_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
     /// Processes [CreateDaoState](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_dao_state(
@@ -4229,6 +4390,7 @@ impl Processor {
         let dao_community_tokens_to_info = next_account_info(account_info_iter)?;
         let dao_community_token_mint_info = next_account_info(account_info_iter)?;
         let community_token_dto_info = next_account_info(account_info_iter)?;
+        let community_tokens_counter_dto_info = next_account_info(account_info_iter)?;
         let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
         let system_program_info = next_account_info(account_info_iter)?;
         let token_program_info = next_account_info(account_info_iter)?;
@@ -4261,7 +4423,7 @@ impl Processor {
             || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
-        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;       
 
         if *dao_community_token_mint_info.key != community_token.token_mint {
             return Err(StakePoolError::InvalidPdaAddress.into());
@@ -4274,6 +4436,14 @@ impl Processor {
             || dao_community_tokens_to_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
+
+        if *community_tokens_counter_dto_info.key != CommunityTokensCounter::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_tokens_counter_dto_info.data_is_empty()
+            || community_tokens_counter_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        } 
 
         if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, user_wallet_info.key).0 {
             return Err(StakePoolError::InvalidPdaAddress.into());
@@ -4292,6 +4462,11 @@ impl Processor {
             community_token_staking_rewards.set_last_rewarded_epoch(current_epoch);
             community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
+            let mut community_tokens_counter = try_from_slice_unchecked::<CommunityTokensCounter>(&community_tokens_counter_dto_info.data.borrow())?;
+            let num = community_tokens_counter.fill_evs_dao_reserve(amount)
+                .ok_or(StakePoolError::CalculationFailure)?;
+            community_tokens_counter.serialize(&mut *community_tokens_counter_dto_info.data.borrow_mut())?;
+            
             Self::token_mint_to(
                 stake_pool_info.key,
                 token_program_info.clone(),
@@ -4300,7 +4475,7 @@ impl Processor {
                 withdraw_authority_info.clone(),
                 AUTHORITY_WITHDRAW,
                 stake_pool.stake_withdraw_bump_seed,
-                amount,
+                num,
             )?;
         }
 
@@ -4441,6 +4616,14 @@ impl Processor {
                 msg!("Instruction: CreateCommunityToken");
                 Self::process_create_community_token(program_id, accounts, token_mint)
             }
+            StakePoolInstruction::CreateCommunityTokensCounter => {
+                msg!("Instruction: CreateCommunityTokensCounter");
+                Self::process_create_community_tokens_counter(program_id, accounts)
+            }
+            StakePoolInstruction::PatchCommunityTokensCounter => {
+                msg!("Instruction: PatchCommunityTokensCounter");
+                Self::process_patch_community_tokens_counter(program_id, accounts)
+            }          
             StakePoolInstruction::CreateDaoState {
                 is_enabled,
             } => {

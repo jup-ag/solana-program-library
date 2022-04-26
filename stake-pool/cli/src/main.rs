@@ -48,7 +48,7 @@ use {
         self, find_stake_program_address, find_transient_stake_program_address,
         find_withdraw_authority_program_address,
         instruction::{FundingType, PreferredValidatorType},
-        state::{Fee, FeeType, StakePool, ValidatorList, SimplePda, CommunityToken, DaoState, NetworkAccountType, CommunityTokenStakingRewards, CommunityTokenStakingRewardsCounter, AccountGroup},
+        state::{Fee, FeeType, StakePool, ValidatorList, SimplePda, CommunityToken, DaoState, NetworkAccountType, CommunityTokenStakingRewards, CommunityTokenStakingRewardsCounter, AccountGroup, CommunityTokensCounter},
         MINIMUM_ACTIVE_STAKE,
     },
     std::cmp::Ordering,
@@ -548,6 +548,12 @@ fn command_create_pool(
         .rpc_client
         .get_minimum_balance_for_rent_exemption(community_token_dto_length)?;
 
+        let community_tokens_counter_dto_pubkey = CommunityTokensCounter::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0;
+        let community_tokens_counter_dto_length = get_packed_len::<CommunityTokensCounter>();
+        let rent_exemption_for_community_tokens_counter_dto_account = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(community_tokens_counter_dto_length)?;
+
         let community_token_staking_rewards_counter_dto_pubkey = CommunityTokenStakingRewardsCounter::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0;
         let community_token_staking_rewards_counter_dto_length = get_packed_len::<CommunityTokenStakingRewardsCounter>();
         let rent_exemption_for_community_token_staking_rewards_counter_dto_account = config
@@ -555,6 +561,7 @@ fn command_create_pool(
         .get_minimum_balance_for_rent_exemption(community_token_staking_rewards_counter_dto_length)?;
         total_rent_free_balances = total_rent_free_balances 
             + rent_exemption_for_community_token_dto_account
+            + rent_exemption_for_community_tokens_counter_dto_account
             + rent_exemption_for_community_token_staking_rewards_counter_dto_account;
 
         community_mint_keypair = Some(Keypair::new());
@@ -599,6 +606,18 @@ fn command_create_pool(
                 &dao_state_dto_pubkey,
             )
         );
+
+        initialize_instructions.push(
+            spl_stake_pool::instruction::create_community_tokens_counter(
+                &spl_stake_pool::id(),
+                &stake_pool_keypair.pubkey(),
+                &config.manager.pubkey(),
+                &community_tokens_counter_dto_pubkey,                
+                &community_token_dto_pubkey,
+                &community_mint_keypair.as_ref().unwrap().pubkey(),
+            )
+        );
+
         initialize_instructions.push(
             spl_stake_pool::instruction::create_community_token_staking_rewards_counter(
                 &spl_stake_pool::id(),
@@ -1977,7 +1996,8 @@ fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
     if dao_state {
         dao_details = Some(CliDaoDetails::from((
             get_community_token(&config.rpc_client, stake_pool_address)?.to_string(),
-            get_community_token_staking_rewards_counter(&config.rpc_client, stake_pool_address)?,          
+            get_community_token_staking_rewards_counter(&config.rpc_client, stake_pool_address)?,
+            get_community_tokens_counter(&config.rpc_client, stake_pool_address)?,
         )));
     }
 
@@ -3660,6 +3680,12 @@ fn command_create_community_token(
     .rpc_client
     .get_minimum_balance_for_rent_exemption(community_token_dto_length)?;
 
+    let community_tokens_counter_dto_pubkey = CommunityTokensCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let community_tokens_counter_dto_length = get_packed_len::<CommunityTokensCounter>();
+    let rent_exemption_for_community_tokens_counter_dto_account = config
+    .rpc_client
+    .get_minimum_balance_for_rent_exemption(community_tokens_counter_dto_length)?;    
+
     let community_token_staking_rewards_counter_dto_pubkey = CommunityTokenStakingRewardsCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
     let community_token_staking_rewards_counter_dto_length = get_packed_len::<CommunityTokenStakingRewardsCounter>();
     let rent_exemption_for_community_token_staking_rewards_counter_dto_account = config
@@ -3692,13 +3718,21 @@ fn command_create_community_token(
             &community_mint_keypair.pubkey(),
             &dao_state_dto_pubkey
         ),
+        spl_stake_pool::instruction::create_community_tokens_counter(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &config.manager.pubkey(),
+            &community_tokens_counter_dto_pubkey,            
+            &community_token_dto_pubkey,
+            &community_mint_keypair.pubkey(),
+        ),
         spl_stake_pool::instruction::create_community_token_staking_rewards_counter(
             &spl_stake_pool::id(),
             stake_pool_address,
             &config.manager.pubkey(),
             &community_token_staking_rewards_counter_dto_pubkey,
             &community_token_dto_pubkey
-        )
+        ),
     ];
 
     let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
@@ -3709,7 +3743,8 @@ fn command_create_community_token(
     );
 
     let total_consumption = rent_exemption_for_token_mint_account 
-        + rent_exemption_for_community_token_dto_account 
+        + rent_exemption_for_community_token_dto_account
+        + rent_exemption_for_community_tokens_counter_dto_account 
         + rent_exemption_for_community_token_staking_rewards_counter_dto_account
         + config.rpc_client.get_fee_for_message(&message)?;
     check_fee_payer_balance(
@@ -3843,6 +3878,12 @@ fn command_dao_strategy_distribute_community_tokens(
         .get_account(&community_token_dto_pubkey)?;
     let community_token = try_from_slice_unchecked::<CommunityToken>(community_token_dto_account.data.as_slice())?;
 
+    let community_tokens_counter_dto_pubkey = CommunityTokensCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let community_tokens_counter_dto_account = config
+        .rpc_client
+        .get_account(&community_tokens_counter_dto_pubkey)?;
+    let community_tokens_counter = try_from_slice_unchecked::<CommunityTokensCounter>(community_tokens_counter_dto_account.data.as_slice())?;    
+
     let community_token_staking_rewards_counter_dto_pubkey = CommunityTokenStakingRewardsCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
     let community_token_staking_rewards_counter_dto_account = config
         .rpc_client
@@ -3900,23 +3941,36 @@ fn command_dao_strategy_distribute_community_tokens(
 
             let community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&account.data[..])?;
 
-            if let Some(amount) = get_amount_of_community_tokens_by_dao_tokenomics(config, &community_token_staking_rewards, &stake_pool.pool_mint, current_epoch)? {
-                instructions.push(
-                    spl_stake_pool::instruction::mint_community_token(
-                        &spl_stake_pool::id(),
-                        &stake_pool_address,
-                        &config.manager.pubkey(),
-                        community_token_staking_rewards.get_owner_wallet(),
-                        &pool_withdraw_authority,
-                        &get_associated_token_address(community_token_staking_rewards.get_owner_wallet(), &community_token.token_mint),
-                        &community_token.token_mint,
-                        &community_token_dto_pubkey,
-                        &account_pubkey,
-                        &spl_token::id(),
-                        amount,
-                        current_epoch
-                    )
-                );
+            if let Some(amount) = get_amount_of_community_tokens_by_dao_tokenomics(config, &community_token_staking_rewards, &stake_pool.pool_mint, current_epoch)? {             
+                match community_tokens_counter.get_dao_reserve_allowed_tokens_number(amount) {
+                    Some(0) => return Err(format!("EVS DAO Reserve max supply reached: {}", 
+                        spl_token::amount_to_ui_amount(CommunityTokensCounter::MAX_EVS_DAO_RESERVE_SUPPLY, CommunityTokensCounter::DECIMALS)).into()
+                    ),
+                    Some(num) => {
+                        if num < amount { 
+                            eprintln!("EVS Dao Reserve tokens counter is about to reach the max supply. Only {} tokens can be minted", 
+                                spl_token::amount_to_ui_amount(num, CommunityTokensCounter::DECIMALS)
+                            )
+                        }
+                        instructions.push(
+                        spl_stake_pool::instruction::mint_community_token(
+                            &spl_stake_pool::id(),
+                            &stake_pool_address,
+                            &config.manager.pubkey(),
+                            community_token_staking_rewards.get_owner_wallet(),
+                            &pool_withdraw_authority,
+                            &get_associated_token_address(community_token_staking_rewards.get_owner_wallet(), &community_token.token_mint),
+                            &community_token.token_mint,
+                            &community_token_dto_pubkey,
+                            &community_tokens_counter_dto_pubkey,
+                            &account_pubkey,
+                            &spl_token::id(),
+                            num,
+                            current_epoch,
+                        ))
+                    }
+                    None => return Err("Couldn't calcualate how many community tokens should be minted".into()),
+                }
             }
         }
     }
@@ -3927,6 +3981,63 @@ fn command_dao_strategy_distribute_community_tokens(
         transaction.sign(&signers, recent_blockhash);
         send_transaction(config, transaction)?;
     }
+
+    Ok(())
+}
+
+
+// DELETE after using!!!
+fn command_patch_community_tokens_counter(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+
+    if !DaoState::get(&config.rpc_client, &stake_pool_address)?.is_enabled {
+        return Err("Logic error: DAO is not enabled for the pool yet. You should enable it first".into());
+    }
+
+    let community_token_dto_pubkey = CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0; 
+    let community_token = CommunityToken::get(&config.rpc_client, &stake_pool_address)?;
+
+    let community_tokens_counter_dto_pubkey = CommunityTokensCounter::find_address(&spl_stake_pool::id(), &stake_pool_address).0;
+    let community_tokens_counter_dto_length = get_packed_len::<CommunityTokensCounter>();
+    let rent_exemption_for_community_tokens_counter_dto_account = config
+    .rpc_client
+    .get_minimum_balance_for_rent_exemption(community_tokens_counter_dto_length)?;
+
+    let instruction = spl_stake_pool::instruction::patch_community_tokens_counter(
+        &spl_stake_pool::id(),
+        &stake_pool_address,
+        &config.manager.pubkey(),
+        &community_tokens_counter_dto_pubkey,
+        &community_token_dto_pubkey,
+        &community_token.token_mint,
+    );
+
+    let latest_blockhash = get_latest_blockhash(&config.rpc_client)?;
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&config.fee_payer.pubkey()),
+        &latest_blockhash,
+    );
+
+    let total_consumption = rent_exemption_for_community_tokens_counter_dto_account 
+        + config.rpc_client.get_fee_for_message(&message)?;
+    check_fee_payer_balance(
+        config,
+        total_consumption,
+    )?;
+
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        config.manager.as_ref(),
+    ];
+    unique_signers!(signers);
+
+    send_transaction(config, Transaction::new(&signers, message, latest_blockhash))?;
 
     Ok(())
 }
@@ -5094,15 +5205,29 @@ fn main() {
             )
         )
         .subcommand(SubCommand::with_name("dao-strategy-distribute-community-tokens")
-        .about("Distribute community tokens to stakers with existing DAO`s community tokens strategy")
-        .arg(
-            Arg::with_name("pool")
-                .index(1)
-                .validator(is_pubkey)
-                .value_name("POOL_ADDRESS")
-                .takes_value(true)
-                .required(true)
-                .help("Stake pool address"),
+            .about("Distribute community tokens to stakers with existing DAO`s community tokens strategy")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+        )
+        //DELETE after using!!!
+
+        .subcommand(SubCommand::with_name("patch-community-tokens-counter")
+            .about("This command is to be removed after using. Creates or modifies the community tokens counter using specified initial values")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
             )
         )
         .get_matches();
@@ -5633,6 +5758,10 @@ fn main() {
         ("dao-strategy-distribute-community-tokens", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             command_dao_strategy_distribute_community_tokens(&config, &stake_pool_address)
+        }
+        ("patch-community-tokens-counter", Some(arg_matches)) => {        // TODO DELETE AFTER EXECUTION
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            command_patch_community_tokens_counter(&config, &stake_pool_address)
         }
         _ => unreachable!(),
     }

@@ -554,7 +554,10 @@ pub enum StakePoolInstruction {
     CreateCommunityTokenStakingRewardsCounter,
 
     ///   Mints community tokens
-    ///
+    ///   Currenty, we mint tokens for EVS DAO Reserve, which contains up to 75% of community tokens max supply
+    ///   The strategy for EVS Strategic Reserve, which contains up to 25% of community tokens max supply, is not implemented yet
+    ///   The community tokens counter and its limits are implemented using CommunityTokensCounter structure
+    /// 
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[]` User wallet
@@ -574,6 +577,39 @@ pub enum StakePoolInstruction {
         #[allow(dead_code)] // but it's not
         current_epoch: u64
     },
+
+    ///   Create account for community tokens counter
+    ///   It comprises of two separate counters: EVS DAO Reserve and EVS Strategic Reserve
+    ///   EVS DAO reserve can hold up to 75% of max tokens supply
+    ///   EVS Strategic reserve can hold up to 25% of max tokens supply
+    /// 
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Account for community tokens counter
+    ///   3. `[]` Community token dto account
+    ///   4. `[]` Community token mint account
+    ///   5. `[]` Rent sysvar
+    ///   6. `[]` System program account   
+    CreateCommunityTokensCounter,
+
+    ///   DELETE after using!!!
+    ///   Create or modify account for community tokens counter.
+    ///   It comprises of two separate counters: EVS DAO Reserve and EVS Strategic Reserve
+    ///   EVS DAO reserve can hold up to 75% of max tokens supply
+    ///   EVS Strategic reserve can hold up to 25% of max tokens supply
+    /// 
+    ///   The counters are initialized as follows:
+    ///   - EVS DAO Reserve is set to the current community mint supply
+    ///   - EVS DAO Strategic Reserve is set to 0
+    /// 
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Account for community tokens counter
+    ///   3. `[]` Community token dto account
+    ///   4. `[]` Community token mint account
+    ///   5. `[]` Rent sysvar
+    ///   6. `[]` System program account   
+    PatchCommunityTokensCounter,
 }
 
 /// Creates an 'initialize' instruction.
@@ -1628,6 +1664,63 @@ pub fn create_community_token(
     }
 }
 
+/// Creates instruction required to create account for storing Community tokens counter.
+pub fn create_community_tokens_counter(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    community_tokens_counter_dto: &Pubkey,
+    community_token_dto: &Pubkey,
+    community_token_mint: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*community_tokens_counter_dto, false),
+        AccountMeta::new(*community_token_dto, false),
+        AccountMeta::new_readonly(*community_token_mint, false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::CreateCommunityTokensCounter
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// DELETE after using !!!
+/// Creates instruction required to create or modify Community tokens counter.
+pub fn patch_community_tokens_counter(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    community_tokens_counter_dto: &Pubkey,
+    community_token_dto: &Pubkey,
+    community_token_mint: &Pubkey,    
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*community_tokens_counter_dto, false),
+        AccountMeta::new(*community_token_dto, false),
+        AccountMeta::new(*community_token_mint, false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::PatchCommunityTokensCounter
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
 /// Creates instruction required to create account for storing DAO`s state
 pub fn create_dao_state(
     program_id: &Pubkey,
@@ -2083,6 +2176,7 @@ pub fn mint_community_token(
     dao_community_tokens_to: &Pubkey,
     dao_community_token_mint: &Pubkey,
     community_token_dto: &Pubkey,
+    community_tokens_counter_dto: &Pubkey,
     community_token_staking_rewards_dto: &Pubkey,
     token_program_id: &Pubkey,
     amount: u64,
@@ -2096,6 +2190,7 @@ pub fn mint_community_token(
         AccountMeta::new(*dao_community_tokens_to, false),
         AccountMeta::new(*dao_community_token_mint, false),
         AccountMeta::new_readonly(*community_token_dto, false),
+        AccountMeta::new(*community_tokens_counter_dto, false),
         AccountMeta::new(*community_token_staking_rewards_dto, false),
         AccountMeta::new_readonly(system_program::id(), false),
         AccountMeta::new_readonly(*token_program_id, false),

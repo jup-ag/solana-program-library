@@ -916,6 +916,89 @@ pub enum NetworkAccountType {
     CommunityTokenStakingRewards
 }
 
+/// Counter of community tokens
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct CommunityTokensCounter {
+    evs_dao_reserve: u64,
+    evs_strategic_reserve: u64,
+}
+
+impl CommunityTokensCounter {
+    /// Seed prefix
+    const SEED_PREFIX: &'static [u8] = b"community_tokens_counter";
+
+    /// Decimals of community token
+    pub const DECIMALS: u8 = spl_token::native_mint::DECIMALS;
+
+    /// Multiplier for raw represenation
+    const MULT_RAW: u64 = 10u64.pow(Self::DECIMALS as u32);
+
+    /// Max supply for EVS DAO reserve
+    pub const MAX_EVS_DAO_RESERVE_SUPPLY: u64 = 75_000_000 * Self::MULT_RAW;
+
+    /// Max supply for EVS strategic reserve
+    pub const MAX_EVS_STRATEGIC_RESERVE_SUPPLY: u64 = 25_000_000 * Self::MULT_RAW;
+
+    /// Constrtructor
+    pub fn new(evs_dao_reserve: u64, evs_strategic_reserve: u64) -> Self {
+        Self {
+            evs_dao_reserve,
+            evs_strategic_reserve,
+        }
+    }
+
+    /// Get max EVS supply
+    pub fn get_max_supply() -> u64 {
+        Self::MAX_EVS_DAO_RESERVE_SUPPLY + Self::MAX_EVS_STRATEGIC_RESERVE_SUPPLY
+    }
+
+    /// Getter for ui representation of evs_dao_reserve
+    pub fn get_ui_evs_dao_reserve(&self) -> f64 {
+        self.evs_dao_reserve as f64 / Self::MULT_RAW as f64
+    }
+    
+    /// Getter for ui representation of evs_strategic_reserve
+    pub fn get_ui_evs_strategic_reserve(&self) -> f64 {
+        self.evs_strategic_reserve as f64 / Self::MULT_RAW as f64
+    }
+
+    /// Get the number of tokens allowed to be minted for EVS DAO reserve
+    pub fn get_dao_reserve_allowed_tokens_number(&self, num: u64) -> Option<u64> {
+        if self.evs_dao_reserve.checked_add(num)? > Self::MAX_EVS_DAO_RESERVE_SUPPLY {
+            Self::MAX_EVS_DAO_RESERVE_SUPPLY.checked_sub(self.evs_dao_reserve)
+        } else {
+            Some(num)
+        }
+    }
+
+    /// Get the number of tokens allowed to be minted for EVS strategic reserve
+    pub fn get_strategic_reserve_allowed_tokens_number(&self, num: u64) -> Option<u64> {
+        if self.evs_strategic_reserve.checked_add(num)? > Self::MAX_EVS_STRATEGIC_RESERVE_SUPPLY {
+            Self::MAX_EVS_STRATEGIC_RESERVE_SUPPLY.checked_sub(self.evs_strategic_reserve)
+        } else {
+            Some(num)
+        }
+    }
+
+    /// Fills evs dao reserve with the specified number of tokens and
+    /// returns the actual number of tokens evs dao reserve has been filled with 
+    pub fn fill_evs_dao_reserve(&mut self, num: u64) -> Option<u64> {
+        let anum = self.get_dao_reserve_allowed_tokens_number(num)?;
+        if anum > 0 {
+            self.evs_dao_reserve = self.evs_dao_reserve.checked_add(anum)?;
+            return Some(anum)
+        }
+        None
+    }
+}
+
+impl SimplePda for CommunityTokensCounter {
+    fn get_seed_prefix() -> &'static [u8] {
+        return Self::SEED_PREFIX;
+    }
+}
+
 /// Initialized information for payment the reward`s in DAO tokens
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]

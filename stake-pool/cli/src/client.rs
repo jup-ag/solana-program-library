@@ -10,12 +10,30 @@ use {
     solana_program::{borsh::try_from_slice_unchecked, program_pack::Pack, pubkey::Pubkey, stake},
     spl_stake_pool::{
         find_withdraw_authority_program_address,
-        state::{StakePool, ValidatorList, SimplePda, DaoState, CommunityToken, CommunityTokenStakingRewardsCounter},
+        state::{StakePool, ValidatorList, SimplePda, DaoState, CommunityToken, CommunityTokenStakingRewardsCounter, CommunityTokensCounter},
     },
     std::collections::HashSet,
+    borsh::BorshDeserialize,
 };
 
 type Error = Box<dyn std::error::Error>;
+
+/// trait for Stake Pool's DTOs off chain
+pub trait StakePoolDtoOffChain: BorshDeserialize + SimplePda {
+    fn get(rpc_client: &RpcClient, pool_addr: &Pubkey) -> Result<Self, ClientError> {
+        let dto_pubkey = Self::find_address(&spl_stake_pool::id(), pool_addr).0;
+        let dto_account_data = rpc_client
+            .get_account_data(&dto_pubkey)?;
+    
+        let dto = try_from_slice_unchecked::<Self>(dto_account_data.as_slice())?;
+        Ok(dto)       
+    }
+}
+
+impl StakePoolDtoOffChain for CommunityTokensCounter {}
+impl StakePoolDtoOffChain for CommunityToken {}
+impl StakePoolDtoOffChain for CommunityTokenStakingRewardsCounter {}
+impl StakePoolDtoOffChain for DaoState {}
 
 pub fn get_stake_pool(
     rpc_client: &RpcClient,
@@ -162,11 +180,8 @@ pub(crate) fn get_dao_state(
     rpc_client: &RpcClient,
     stake_pool_address: &Pubkey,
 ) -> Result<bool, ClientError> {
-    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let dao_state_dto_account_data = rpc_client
-        .get_account_data(&dao_state_dto_pubkey)?;
+    let dao_state = DaoState::get(&rpc_client, &stake_pool_address)?;
 
-    let dao_state = try_from_slice_unchecked::<DaoState>(dao_state_dto_account_data.as_slice())?;
     Ok(dao_state.is_enabled)
 }
 
@@ -174,12 +189,24 @@ pub(crate) fn get_community_token(
     rpc_client: &RpcClient,
     stake_pool_address: &Pubkey,
 ) -> Result<Pubkey, ClientError> {
-    let ct_dto_pubkey = CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let ct_dto_account_data = rpc_client
-        .get_account_data(&ct_dto_pubkey)?;
-
-    let ct = try_from_slice_unchecked::<CommunityToken>(ct_dto_account_data.as_slice())?;
+    let ct = CommunityToken::get(&rpc_client, &stake_pool_address)?;
+    
     Ok(ct.token_mint)
+}
+
+/// Return (EVS DAO reserve tokens number, EVS strategic reserve tokens number)
+pub(crate) fn get_community_tokens_counter(
+    rpc_client: &RpcClient,
+    stake_pool_address: &Pubkey,
+) -> Result<(f64, f64), ClientError> {
+    let ct_cnt = CommunityTokensCounter::get(&rpc_client, &stake_pool_address);
+
+    if ct_cnt.is_err() {
+        eprintln!("Community tokens counter is not implemented for stake pool {}", stake_pool_address);
+        return Ok((0.0,0.0))
+    }
+    let ct_cnt = ct_cnt.unwrap();
+    Ok((ct_cnt.get_ui_evs_dao_reserve(), ct_cnt.get_ui_evs_strategic_reserve()))
 }
 
 /// Return the following info taken from CommunityTokenStakingRewardsCounter struct
@@ -188,11 +215,7 @@ pub(crate) fn get_community_token_staking_rewards_counter(
     rpc_client: &RpcClient,
     stake_pool_address: &Pubkey,
 ) -> Result<(u64,u16,u64), ClientError> {
-    let cnt_dto_pubkey = CommunityTokenStakingRewardsCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let cnt_dto_account_data = rpc_client
-        .get_account_data(&cnt_dto_pubkey)?;
-
-    let counter = try_from_slice_unchecked::<CommunityTokenStakingRewardsCounter>(cnt_dto_account_data.as_slice())?;
+    let counter = CommunityTokenStakingRewardsCounter::get(&rpc_client, &stake_pool_address)?;
 
     Ok((
         counter.get_account().get_value(),
