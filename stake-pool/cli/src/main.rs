@@ -6,6 +6,7 @@ use {
         client::*,
         output::{CliStakePool, CliStakePoolDetails, CliDaoDetails, CliStakePoolStakeAccountInfo, CliStakePools},
     },
+    serde::{Deserialize, Serialize},
     clap::{
         crate_description, crate_name, crate_version, value_t, value_t_or_exit, App, AppSettings,
         Arg, ArgGroup, ArgMatches, SubCommand,
@@ -230,6 +231,8 @@ const VALIDATOR_MAXIMUM_SKIPPED_SLOTS: f64 = 0.1;
 const VALIDATOR_MINIMUM_APY: f64 = 0.06;
 const VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE: f64 = 1000.0;
 const VALIDATORS_QUANTITY: usize = 25;
+const VALIDATORS_OFFSET: usize = 25;
+const VALIDATORS_QUERY_SIZE: usize = 1400;
 
 #[derive(Debug)]
 pub struct ValidatorComparableParameters {
@@ -237,6 +240,27 @@ pub struct ValidatorComparableParameters {
     skipped_slots: f64,
     apy: f64,
     total_active_stake: f64,
+}
+
+#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize)]
+pub enum ValidatorDropReason {
+    HighFee,
+    TooManySkippedSlots,
+    LowApy,
+    LowTotalActiveStake,
+    ApyLowerThanNewLowestApy,
+    TotalActiveStakeLowerThanQueryOffset,
+}
+
+fn check_validator_data(validator_data: &ValidatorsData) -> bool {
+    let validator_comparable_parameters = ValidatorComparableParameters {
+        fee: validator_data.fee,
+        skipped_slots: validator_data.skipped_slots,
+        apy: validator_data.apy,
+        total_active_stake: validator_data.total_active_stake,
+    };
+    check_validator(&validator_comparable_parameters)
 }
 
 fn check_validator(validator_comparable_parameters: &ValidatorComparableParameters) -> bool {
@@ -248,7 +272,7 @@ fn check_validator(validator_comparable_parameters: &ValidatorComparableParamete
 }
 
 // DTO for https://api.stakesolana.app/v1/validators
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct ValidatorsApiResponse {
     data: Vec<ValidatorsData>,
     #[allow(dead_code)]
@@ -256,7 +280,7 @@ pub struct ValidatorsApiResponse {
 }
 
 // DTO for https://api.stakesolana.app/v1/validators
-#[derive(serde::Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct ValidatorsData {
     #[allow(dead_code)]
     name: String,
@@ -273,74 +297,158 @@ pub struct ValidatorsData {
     skipped_slots: f64,
     #[allow(dead_code)]
     data_center: String,
+    #[serde(skip_serializing, skip_deserializing)]
+    drop_reasons: Option<Vec<ValidatorDropReason>>,
 }
+
+impl std::cmp::PartialEq for ValidatorsData {
+    fn eq(&self, other: &Self) -> bool {
+        self.vote_pk == other.vote_pk
+        && self.node_pk == other.node_pk
+    }
+}
+impl std::cmp::Eq for ValidatorsData {}
 
 // DTO for https://api.stakesolana.app/v1/validators
 #[allow(dead_code)]
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct ValidatorsMetaData {
     limit: i64,
     offset: i64,
     total_amount: u64,
 }
 
-fn get_necessary_validators_vote_account_pubkey() -> Result<Vec<Pubkey>, Error> {
-    let response = reqwest::blocking::get(
-        "https://api.stakesolana.app/v1/validators?sort=stake&desc=true&offset=25&limit=700",
-    )?;
-
-    let mut validator_api_response =
-        serde_json::from_slice::<'_, ValidatorsApiResponse>(&response.bytes()?[..])?;
-
-    let mut result: Vec<Pubkey> = vec![];
-
-    validator_api_response.data.sort_by(
-        |a: &'_ ValidatorsData, b: &'_ ValidatorsData| -> Ordering {
-            if a.apy > b.apy {
-                return Ordering::Less;
-            } else {
-                if a.apy < b.apy {
-                    return Ordering::Greater;
-                } else {
-                    return Ordering::Equal;
-                }
-            }
-        },
-    );
-
-    for validtor_data in validator_api_response.data.into_iter() {
-        if result.len() == VALIDATORS_QUANTITY {
-            return Ok(result);
-        }
-
-        let validator_comparable_parameters = ValidatorComparableParameters {
-            fee: validtor_data.fee,
-            skipped_slots: validtor_data.skipped_slots,
-            apy: validtor_data.apy,
-            total_active_stake: validtor_data.total_active_stake,
-        };
-
-        if check_validator(&validator_comparable_parameters) {
-            result.push(Pubkey::from_str(validtor_data.vote_pk.as_str())?);
-        }
-    }
-
-    return Ok(result);
+#[derive(Clone)]
+#[derive(Serialize, Deserialize)]
+pub struct ValidatorsDataVec {
+    vec: Vec<ValidatorsData>,
+    desc: Option<String>,
 }
 
-fn get_existing_validators_vote_account_pubkey(
-    config: &Config,
-    validator_list_address: &Pubkey,
-) -> Result<Vec<Pubkey>, Error> {
-    let validator_list = get_validator_list(&config.rpc_client, validator_list_address)?;
-
-    let mut result: Vec<Pubkey> = vec![];
-
-    for validator_stake_info in validator_list.validators.into_iter() {
-        result.push(validator_stake_info.vote_account_address)
+impl ValidatorsDataVec {
+    fn new(vec: &[ValidatorsData], desc: Option<String>) -> Self {
+        let mut new_self = Self { vec: vec.to_owned(), desc };
+        new_self.sort_by_apy();
+        new_self
     }
 
-    return Ok(result);
+    fn sort_by_apy(&mut self) -> &mut Self{
+        self.vec.sort_by(
+            |a, b| b.apy.partial_cmp(&a.apy).unwrap()
+        );
+        self
+    }
+
+    fn exclude_current(&mut self, current_validators: &[ValidatorsData]) -> &mut Self{
+        current_validators.iter().for_each(
+            |cv| self.vec.retain(|x| x != cv)
+        );
+        self
+    }
+
+    fn check_and_shrink(&mut self) -> &mut Self {
+        self.vec.retain(|x| check_validator_data(x));
+        if self.vec.len() > VALIDATORS_QUANTITY {
+            self.vec.resize(VALIDATORS_QUANTITY, ValidatorsData::default());
+        }
+        self
+    }
+
+    fn dry_run_update(&self, potential_validators: &[ValidatorsData]) -> (ValidatorsDataVec, ValidatorsDataVec) {        
+        let mut validators_to_be_added: Vec<ValidatorsData> = vec![];
+        let mut validators_to_be_removed: Vec<ValidatorsData> = vec![];
+        let potential_validators = Self::new(potential_validators, None).check_and_shrink().to_owned();
+
+        potential_validators.vec
+            .iter()
+            .filter(|pv| !self.vec.contains(pv))
+            .for_each(|pv| validators_to_be_added.push(pv.clone()));
+
+        self.vec
+            .iter()
+            .filter(|pv| !potential_validators.vec.contains(pv))
+            .for_each(|pv| validators_to_be_removed.push(pv.clone()));
+            
+        let mut validators_to_be_removed = ValidatorsDataVec::new(&validators_to_be_removed[..], Some("Validators to be removed".to_string()));
+        validators_to_be_added.last().and_then(|last| Some(validators_to_be_removed.mark_dropped(last.apy)));
+        ( 
+            ValidatorsDataVec::new(&validators_to_be_added[..], Some("Validators to be added".to_string())),
+            validators_to_be_removed,
+        )
+    }
+
+    fn mark_dropped(&mut self, new_lowest_apy: f64) {
+        self.vec.iter_mut().for_each(|v| {
+            let mut drop_reasons = vec![];
+            if v.fee > VALIDATOR_MAXIMUM_FEE { drop_reasons.push(ValidatorDropReason::HighFee) }
+            if v.skipped_slots > VALIDATOR_MAXIMUM_SKIPPED_SLOTS { drop_reasons.push(ValidatorDropReason::TooManySkippedSlots) }
+            if v.apy < VALIDATOR_MINIMUM_APY { drop_reasons.push(ValidatorDropReason::LowApy) }
+            if v.total_active_stake < VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE { drop_reasons.push(ValidatorDropReason::LowTotalActiveStake) }           
+            if drop_reasons.len() == 0 {
+                if v.apy < new_lowest_apy { 
+                    drop_reasons.push(ValidatorDropReason::ApyLowerThanNewLowestApy)
+                } else {
+                    drop_reasons.push(ValidatorDropReason::TotalActiveStakeLowerThanQueryOffset)
+                }
+            }
+            v.drop_reasons = Some(drop_reasons)
+        });
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct ValidatorsInfo {
+    current_validators: ValidatorsDataVec,
+    potential_validators: ValidatorsDataVec,
+    validators_to_be_added: ValidatorsDataVec,
+    validators_to_be_removed: ValidatorsDataVec,
+}
+
+impl ValidatorsInfo {
+    fn url_get_current_validators() -> String {
+        format!("https://api.stakesolana.app/v1/pool-validators/EverSOL?sort=apy&desc=true&offset=0&limit={}",
+            VALIDATORS_QUANTITY,
+        )
+    }
+    
+    fn url_get_potential_validators() -> String {
+        format!("https://api.stakesolana.app/v1/validators?sort=stake&desc=true&offset={}&limit={}",
+            VALIDATORS_OFFSET,
+            VALIDATORS_QUERY_SIZE,
+        )
+    }
+
+    fn new() -> Result<Self, Error> {
+        let response = reqwest::blocking::get(Self::url_get_current_validators())?;
+        let current_validators_response: ValidatorsApiResponse =
+            serde_json::from_slice(&response.bytes()?[..])?;
+        let current_validators = ValidatorsDataVec::new(&current_validators_response.data, Some("Current Validators".to_string()));
+
+        let response = reqwest::blocking::get(Self::url_get_potential_validators())?;
+        let potential_validators_response: ValidatorsApiResponse =
+            serde_json::from_slice(&response.bytes()?[..])?;
+
+        let potential_validators = 
+            ValidatorsDataVec::new(&potential_validators_response.data, Some("Potential Validators".to_string()))
+                .exclude_current(&current_validators.vec)
+                .check_and_shrink()
+                .to_owned();
+
+        let (validators_to_be_added, validators_to_be_removed) = current_validators.dry_run_update(&potential_validators_response.data);
+    
+        Ok(Self{
+            current_validators,
+            potential_validators,
+            validators_to_be_added,
+            validators_to_be_removed,
+        })
+    }
+}
+
+fn command_show_validators_info(config: &Config) -> CommandResult {
+    let validators_info = ValidatorsInfo::new()?;
+    println!("{}", config.output_format.formatted_string(&validators_info));
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3398,43 +3506,6 @@ fn command_distribute_stake(
     Ok(())
 }
 
-fn command_change_validators(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
-    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-    let new_validators_vote_accounts = get_necessary_validators_vote_account_pubkey()?;
-    let old_validators_vote_accounts =
-        get_existing_validators_vote_account_pubkey(config, &stake_pool.validator_list)?;
-    let mut validators_to_be_added: Vec<&Pubkey> = vec![];
-    let mut validators_to_be_removed: Vec<&Pubkey> = vec![];
-
-    'new: for new_validators_vote in new_validators_vote_accounts.iter() {
-        validators_to_be_added.push(new_validators_vote);
-
-        for old_validators_vote in old_validators_vote_accounts.iter() {
-            if new_validators_vote.to_bytes()[..] == old_validators_vote.to_bytes()[..] {
-                validators_to_be_added.pop();
-
-                continue 'new;
-            }
-        }
-    }
-
-    'old: for old_validators_vote in old_validators_vote_accounts.iter() {
-        validators_to_be_removed.push(old_validators_vote);
-
-        for new_validators_vote in new_validators_vote_accounts.iter() {
-            if old_validators_vote.to_bytes()[..] == new_validators_vote.to_bytes()[..] {
-                validators_to_be_removed.pop();
-
-                continue 'old;
-            }
-        }
-    }
-
-    todo!();
-
-    Ok(())
-}
-
 fn command_withdraw_stake_for_subsequent_removing_validator(
     config: &Config,
     stake_pool_address: &Pubkey,
@@ -3556,7 +3627,7 @@ fn command_check_accounts_for_rent_exempt(
 }
 
 // DTO for https://api.stakesolana.app/v1/pool-validators/{pname}
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct PoolValidatorsApiResponse {
     data: Vec<PoolValidatorsData>,
     #[allow(dead_code)]
@@ -3564,7 +3635,7 @@ pub struct PoolValidatorsApiResponse {
 }
 
 // DTO for https://api.stakesolana.app/v1/pool-validators/{pname}
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct PoolValidatorsData {
     #[allow(dead_code)]
     name: String,
@@ -3587,7 +3658,7 @@ pub struct PoolValidatorsData {
 
 // DTO for https://api.stakesolana.app/v1/pool-validators/{pname}
 #[allow(dead_code)]
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct PoolValidatorsMetaData {
     limit: i64,
     offset: i64,
@@ -5230,6 +5301,9 @@ fn main() {
                     .help("Stake pool address"),
             )
         )
+        .subcommand(SubCommand::with_name("show-validators-info")
+            .about("Show comprehensive information about validators")
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -5633,10 +5707,6 @@ fn main() {
 
             command_distribute_stake(&config, &stake_pool_address, only_from_reserve)
         }
-        ("change-validators", Some(arg_matches)) => {
-            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            command_change_validators(&config, &stake_pool_address)
-        }
         ("withdraw-stake-for-subsequent-removing-validator", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             let vote_account_address = pubkey_of(arg_matches, "vote_account").unwrap();
@@ -5763,6 +5833,7 @@ fn main() {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             command_patch_community_tokens_counter(&config, &stake_pool_address)
         }
+        ("show-validators-info", _) => command_show_validators_info(&config),
         _ => unreachable!(),
     }
     .map_err(|err| {
