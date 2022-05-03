@@ -565,10 +565,11 @@ pub enum StakePoolInstruction {
     ///   4. `[w]` User account to receive pool tokens
     ///   5. `[w]` Community token mint account
     ///   6. `[]`  Account for storing community token dto
-    ///   7. `[w]` Account for storing community token staking rewards dto
-    ///   8. `[]` System program account
-    ///   9. `[]` Token program id
-    ///  10. `[]` Sysvar clock account (required)
+    ///   7. `[w]` Account for storing community tokens counter
+    ///   8. `[w]` Account for storing community token staking rewards dto
+    ///   9. `[]` System program account
+    ///  10. `[]` Token program id
+    ///  11. `[]` Sysvar clock account (required)
     MintCommunityToken {
         /// Community tokens amount
         #[allow(dead_code)] // but it's not
@@ -587,9 +588,8 @@ pub enum StakePoolInstruction {
     ///   1. `[s]` Manager
     ///   2. `[w]` Account for community tokens counter
     ///   3. `[]` Community token dto account
-    ///   4. `[]` Community token mint account
-    ///   5. `[]` Rent sysvar
-    ///   6. `[]` System program account   
+    ///   4. `[]` Rent sysvar
+    ///   5. `[]` System program account   
     CreateCommunityTokensCounter,
 
     ///   DELETE after using!!!
@@ -1671,14 +1671,12 @@ pub fn create_community_tokens_counter(
     manager: &Pubkey,
     community_tokens_counter_dto: &Pubkey,
     community_token_dto: &Pubkey,
-    community_token_mint: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
         AccountMeta::new_readonly(*manager, true),
         AccountMeta::new(*community_tokens_counter_dto, false),
-        AccountMeta::new(*community_token_dto, false),
-        AccountMeta::new_readonly(*community_token_mint, false),
+        AccountMeta::new_readonly(*community_token_dto, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
     ]; 

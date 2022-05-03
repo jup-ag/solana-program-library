@@ -614,7 +614,6 @@ fn command_create_pool(
                 &config.manager.pubkey(),
                 &community_tokens_counter_dto_pubkey,                
                 &community_token_dto_pubkey,
-                &community_mint_keypair.as_ref().unwrap().pubkey(),
             )
         );
 
@@ -3724,7 +3723,6 @@ fn command_create_community_token(
             &config.manager.pubkey(),
             &community_tokens_counter_dto_pubkey,            
             &community_token_dto_pubkey,
-            &community_mint_keypair.pubkey(),
         ),
         spl_stake_pool::instruction::create_community_token_staking_rewards_counter(
             &spl_stake_pool::id(),

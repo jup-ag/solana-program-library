@@ -3040,7 +3040,6 @@ impl Processor {
         let manager_info = next_account_info(account_info_iter)?;
         let community_tokens_counter_dto_info = next_account_info(account_info_iter)?;
         let community_token_dto_info = next_account_info(account_info_iter)?;
-        let community_token_mint_info = next_account_info(account_info_iter)?;
         let rent_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
@@ -3059,12 +3058,7 @@ impl Processor {
         if community_token_dto_info.data_is_empty()
             || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
-        }
-        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;       
-
-        if *community_token_mint_info.key != community_token.token_mint {
-            return Err(StakePoolError::InvalidPdaAddress.into());
-        }
+        }    
 
         let (community_tokens_counter_pubkey, bump_seed) = CommunityTokensCounter::find_address(program_id, stake_pool_info.key);
         if *community_tokens_counter_dto_info.key != community_tokens_counter_pubkey {
