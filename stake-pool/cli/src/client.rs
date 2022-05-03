@@ -199,13 +199,8 @@ pub(crate) fn get_community_tokens_counter(
     rpc_client: &RpcClient,
     stake_pool_address: &Pubkey,
 ) -> Result<(f64, f64), ClientError> {
-    let ct_cnt = CommunityTokensCounter::get(&rpc_client, &stake_pool_address);
+    let ct_cnt = CommunityTokensCounter::get(&rpc_client, &stake_pool_address)?;
 
-    if ct_cnt.is_err() {
-        eprintln!("Community tokens counter is not implemented for stake pool {}", stake_pool_address);
-        return Ok((0.0,0.0))
-    }
-    let ct_cnt = ct_cnt.unwrap();
     Ok((ct_cnt.get_ui_evs_dao_reserve(), ct_cnt.get_ui_evs_strategic_reserve()))
 }
 
