@@ -36,6 +36,10 @@ use {
     },
     spl_token::state::Mint,
     spl_associated_token_account::get_associated_token_address,
+    spl_token_2022::{
+        extension::StateWithExtensions,
+        state::Account,
+    },
 };
 
 /// Minimum deposit
@@ -4342,6 +4346,76 @@ impl Processor {
         Ok(())
     }
 
+    /// Processes [DeleteCommunityTokenStakingRewards](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_delete_community_token_staking_rewards(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {        
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let user_wallet_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
+        let pool_mint_info = next_account_info(account_info_iter)?;
+        let user_pool_token_account_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        stake_pool.check_manager(manager_info)?;
+        stake_pool.check_mint(pool_mint_info)?;
+
+        if *user_pool_token_account_info.key != get_associated_token_address(user_wallet_info.key, pool_mint_info.key) {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if user_pool_token_account_info.data_is_empty()
+            || user_pool_token_account_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let (community_token_staking_rewards_pubkey, bump_seed) = CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, user_wallet_info.key);
+        if *community_token_staking_rewards_dto_info.key != community_token_staking_rewards_pubkey {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_staking_rewards_dto_info.data_is_empty() 
+            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let user_pool_token_account_data = user_pool_token_account_info.data.borrow();
+        let user_pool_token_account = StateWithExtensions::<Account>::unpack(&user_pool_token_account_data)?;
+        if user_pool_token_account.base.amount > 0 {
+            return Err(StakePoolError::NonZeroTokenBalance.into());
+        }
+
+        invoke_signed(
+            &system_instruction::transfer(
+                &community_token_staking_rewards_pubkey,
+                manager_info.key,
+                community_token_staking_rewards_dto_info.lamports()
+            ),
+            &[
+                community_token_staking_rewards_dto_info.clone(),
+                manager_info.clone()
+            ],
+            &[
+                &[
+                    CommunityTokenStakingRewards::SEED_PREFIX,
+                    &stake_pool_info.key.to_bytes()[..],
+                    &user_wallet_info.key.to_bytes()[..],
+                    &program_id.to_bytes()[..],
+                    &[bump_seed],
+                ]
+            ]
+        )?;
+
+        Ok(())
+    }
+
     /// Processes [Instruction](enum.Instruction.html).
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = StakePoolInstruction::try_from_slice(input)?;
@@ -4517,6 +4591,10 @@ impl Processor {
                 msg!("Instruction: MintCommunityToken");
                 Self::process_mint_community_token(program_id, accounts, amount, current_epoch)
             }
+            StakePoolInstruction::DeleteCommunityTokenStakingRewards => {
+                msg!("Instruction: DeleteCommunityTokenStakingRewards");
+                Self::process_delete_community_token_staking_rewards(program_id, accounts)
+            }
         }
     }
 }
@@ -4573,6 +4651,7 @@ impl PrintProgramError for StakePoolError {
             StakePoolError::DataAlreadyExists => msg!("Error: Data exists in account, but should not exists. It is mean account exist."),
             StakePoolError::InvalidEpoch => msg!("Error: Invalid epoch."),
             StakePoolError::InvalidTreasuryFeeAccount => msg!("Error: Invalid treasury fee account"),
+            StakePoolError::NonZeroTokenBalance => msg!("Error: Non zero token balance"),
         }
     }
 }

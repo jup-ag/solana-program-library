@@ -593,6 +593,16 @@ pub enum StakePoolInstruction {
     ///   4. `[]` Rent sysvar
     ///   5. `[]` System program account   
     CreateCommunityTokensCounter,
+
+    ///   Delete account for storing information for DAO`s community tokens destribution strategy
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager 
+    ///   2. '[]' User wallet
+    ///   3. `[w]` Account storing community token staking rewards dto
+    ///   4. '[]' Pool mint
+    ///   5  '[]' User account for storing pool tokens
+    ///   6. `[]` System program account
+    DeleteCommunityTokenStakingRewards,
 }
 
 /// Creates an 'initialize' instruction.
@@ -2165,6 +2175,35 @@ pub fn mint_community_token(
             amount,
             current_epoch
         }
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instruction required to delete account for storing information for DAO`s community tokens destribution strategy
+pub fn delete_community_token_staking_rewards(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    user_wallet: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    pool_mint: &Pubkey,
+    user_pool_token_account: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new_readonly(*user_wallet, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*pool_mint, false),
+        AccountMeta::new_readonly(*user_pool_token_account, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+    
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::DeleteCommunityTokenStakingRewards
             .try_to_vec()
             .unwrap(),
     }

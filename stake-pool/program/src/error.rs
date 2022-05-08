@@ -156,6 +156,9 @@ pub enum StakePoolError {
     /// Invalid treasury fee account.
     #[error("InvalidTreasuryFeeAccount")]
     InvalidTreasuryFeeAccount,
+    /// Non zero token balance.
+    #[error("NonZeroTokenBalance")]
+    NonZeroTokenBalance,
 }
 impl From<StakePoolError> for ProgramError {
     fn from(e: StakePoolError) -> Self {

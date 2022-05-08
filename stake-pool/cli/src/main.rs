@@ -3789,24 +3789,12 @@ const QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING: u8 = 3;
 fn get_amount_of_community_tokens_by_dao_tokenomics(
     config: &Config,
     community_token_staking_rewards: &CommunityTokenStakingRewards,
-    pool_token_mint: &Pubkey,
+    pool_tokens_amount: f64,
     current_epoch: u64
 ) -> Result<Option<u64>, Box<dyn std::error::Error>> {
-    let associated_token_account = config.rpc_client.get_token_account(
-        &get_associated_token_address(
-            community_token_staking_rewards.get_owner_wallet(), pool_token_mint
-        )
-    )?.unwrap();
-    if associated_token_account.mint != pool_token_mint.to_string()
-        || associated_token_account.owner != community_token_staking_rewards.get_owner_wallet().to_string() {
-        return Err("Invalid ATA parameters".into());
+    if pool_tokens_amount == 0.0 {
+        return Err("Pool tokens amount should be greater than 0.".into());
     }
-
-    let pool_tokens_amount = spl_token::ui_amount_to_amount(associated_token_account.token_amount.ui_amount.unwrap(), associated_token_account.token_amount.decimals) as f64;
-    if pool_tokens_amount.floor() as u64 == 0 {
-        return Ok(None);
-    }
-
     // Number of tokens = sqrt(SOL staked)*number_of_epochs*gaining parameter,  
     // where, gaining parameter = [5100:100:29300], till 244 epoch (~2 years).
     //
@@ -3943,35 +3931,62 @@ fn command_dao_strategy_distribute_community_tokens(
 
             let community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&account.data[..])?;
 
-            if let Some(amount) = get_amount_of_community_tokens_by_dao_tokenomics(config, &community_token_staking_rewards, &stake_pool.pool_mint, current_epoch)? {             
-                match community_tokens_counter.get_dao_reserve_allowed_tokens_number(amount) {
-                    Some(0) => return Err(format!("EVS DAO Reserve max supply reached: {}", 
-                        spl_token::amount_to_ui_amount(CommunityTokensCounter::MAX_EVS_DAO_RESERVE_SUPPLY, CommunityTokensCounter::DECIMALS)).into()
-                    ),
-                    Some(num) => {
-                        if num < amount { 
-                            eprintln!("EVS Dao Reserve tokens counter is about to reach the max supply. Only {} tokens can be minted", 
-                                spl_token::amount_to_ui_amount(num, CommunityTokensCounter::DECIMALS)
+            let associated_pool_token_address = get_associated_token_address(community_token_staking_rewards.get_owner_wallet(), &stake_pool.pool_mint);
+            let associated_token_account = config.rpc_client.get_token_account(&associated_pool_token_address)?.unwrap();
+            if associated_token_account.mint != stake_pool.pool_mint.to_string()
+                || associated_token_account.owner != community_token_staking_rewards.get_owner_wallet().to_string() {
+                return Err("Invalid ATA parameters".into());
+            }
+        
+            let pool_tokens_amount = spl_token::ui_amount_to_amount(associated_token_account.token_amount.ui_amount.unwrap(), associated_token_account.token_amount.decimals) as f64;
+            if pool_tokens_amount > 0.0 {
+                if let Some(amount) = get_amount_of_community_tokens_by_dao_tokenomics(config, &community_token_staking_rewards, pool_tokens_amount, current_epoch)? {             
+                    match community_tokens_counter.get_dao_reserve_allowed_tokens_number(amount) {
+                        Some(0) => return Err(format!("EVS DAO Reserve max supply reached: {}", 
+                            spl_token::amount_to_ui_amount(CommunityTokensCounter::MAX_EVS_DAO_RESERVE_SUPPLY, CommunityTokensCounter::DECIMALS)).into()
+                        ),
+                        Some(num) => {
+                            if num < amount { 
+                                eprintln!("EVS Dao Reserve tokens counter is about to reach the max supply. Only {} tokens can be minted", 
+                                    spl_token::amount_to_ui_amount(num, CommunityTokensCounter::DECIMALS)
+                                )
+                            }
+                            instructions.push(
+                                spl_stake_pool::instruction::mint_community_token(
+                                    &spl_stake_pool::id(),
+                                    &stake_pool_address,
+                                    &config.manager.pubkey(),
+                                    community_token_staking_rewards.get_owner_wallet(),
+                                    &pool_withdraw_authority,
+                                    &get_associated_token_address(community_token_staking_rewards.get_owner_wallet(), &community_token.token_mint),
+                                    &community_token.token_mint,
+                                    &community_token_dto_pubkey,
+                                    &community_tokens_counter_dto_pubkey,
+                                    &account_pubkey,
+                                    &spl_token::id(),
+                                    num,
+                                    current_epoch,
+                                )
                             )
                         }
-                        instructions.push(
-                        spl_stake_pool::instruction::mint_community_token(
+                        None => return Err("Couldn't calcualate how many community tokens should be minted".into()),
+                    }
+                }
+            } else {
+                if pool_tokens_amount == 0.0 {
+                    instructions.push(
+                        spl_stake_pool::instruction::delete_community_token_staking_rewards(
                             &spl_stake_pool::id(),
                             &stake_pool_address,
-                            &config.manager.pubkey(),
+                            &config.manager.pubkey(), 
                             community_token_staking_rewards.get_owner_wallet(),
-                            &pool_withdraw_authority,
-                            &get_associated_token_address(community_token_staking_rewards.get_owner_wallet(), &community_token.token_mint),
-                            &community_token.token_mint,
-                            &community_token_dto_pubkey,
-                            &community_tokens_counter_dto_pubkey,
                             &account_pubkey,
-                            &spl_token::id(),
-                            num,
-                            current_epoch,
-                        ))
-                    }
-                    None => return Err("Couldn't calcualate how many community tokens should be minted".into()),
+                            &stake_pool.pool_mint,
+                            &associated_pool_token_address
+                        )
+                    )
+                } else {
+                    return Err("Pool amount cannot be a negative number".into());
                 }
             }
         }

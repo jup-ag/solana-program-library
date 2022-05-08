@@ -3965,6 +3965,7 @@ dependencies = [
  "spl-associated-token-account 1.0.5",
  "spl-math",
  "spl-token 3.3.0",
+ "spl-token-2022",
  "thiserror",
 ]
 
