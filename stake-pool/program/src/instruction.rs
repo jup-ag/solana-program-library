@@ -224,13 +224,14 @@ pub enum StakePoolInstruction {
     ///  the canonical stake account balance.
     ///
     ///  0. `[]` Stake pool
-    ///  1. `[]` Stake pool withdraw authority
-    ///  2. `[w]` Validator stake list storage account
-    ///  3. `[w]` Reserve stake account
-    ///  4. `[]` Sysvar clock
-    ///  5. `[]` Sysvar stake history
-    ///  6. `[]` Stake program
-    ///  7. ..7+N ` [] N pairs of validator and transient stake accounts
+    ///  1  `[s]` Manager
+    ///  2. `[]` Stake pool withdraw authority
+    ///  3. `[w]` Validator stake list storage account
+    ///  4. `[w]` Reserve stake account
+    ///  5. `[]` Sysvar clock
+    ///  6. `[]` Sysvar stake history
+    ///  7. `[]` Stake program
+    ///  8. ..8+N ` [] N pairs of validator and transient stake accounts
     UpdateValidatorListBalance {
         /// Index to start updating on the validator list
         #[allow(dead_code)] // but it's not
@@ -245,20 +246,21 @@ pub enum StakePoolInstruction {
     ///   Updates total pool balance based on balances in the reserve and validator list
     ///
     ///   0. `[w]` Stake pool
-    ///   1. `[]` Stake pool withdraw authority
-    ///   2. `[w]` Validator stake list storage account
-    ///   3. `[]` Reserve stake account
-    ///   4. `[w]` Account to receive pool fee tokens
-    ///   5. `[w]` Pool mint account
-    ///   6. `[w]` Treasury account
-    ///   7. `[w]` Validator`s fee account
+    ///   1  `[s]` Manager
+    ///   2. `[]` Stake pool withdraw authority
+    ///   3. `[w]` Validator stake list storage account
+    ///   4. `[]` Reserve stake account
+    ///   5. `[w]` Account to receive pool Manager fee
+    ///   6. `[w]` Pool mint account
+    ///   7. `[w]` Account to receive treasury fee tokens
     ///   8. `[]` Pool token program
     UpdateStakePoolBalance,
 
     ///   Cleans up validator stake account entries marked as `ReadyForRemoval`
     ///
     ///   0. `[]` Stake pool
-    ///   1. `[w]` Validator stake list storage account
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Validator stake list storage account
     CleanupRemovedValidatorEntries,
 
     ///   Deposit some stake into the pool.  The output is a "pool" token representing ownership
@@ -945,6 +947,7 @@ pub fn decrease_validator_stake_with_vote(
 pub fn update_validator_list_balance(
     program_id: &Pubkey,
     stake_pool: &Pubkey,
+    manager: &Pubkey,
     stake_pool_withdraw_authority: &Pubkey,
     validator_list_address: &Pubkey,
     reserve_stake: &Pubkey,
@@ -955,6 +958,7 @@ pub fn update_validator_list_balance(
 ) -> Instruction {
     let mut accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
         AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
         AccountMeta::new(*validator_list_address, false),
         AccountMeta::new(*reserve_stake, false),
@@ -1002,6 +1006,7 @@ pub fn update_validator_list_balance(
 pub fn update_stake_pool_balance(
     program_id: &Pubkey,
     stake_pool: &Pubkey,
+    manager: &Pubkey,
     withdraw_authority: &Pubkey,
     validator_list_storage: &Pubkey,
     reserve_stake: &Pubkey,
@@ -1012,6 +1017,7 @@ pub fn update_stake_pool_balance(
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
         AccountMeta::new_readonly(*withdraw_authority, false),
         AccountMeta::new(*validator_list_storage, false),
         AccountMeta::new_readonly(*reserve_stake, false),
@@ -1033,10 +1039,12 @@ pub fn update_stake_pool_balance(
 pub fn cleanup_removed_validator_entries(
     program_id: &Pubkey,
     stake_pool: &Pubkey,
+    manager: &Pubkey,
     validator_list_storage: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
         AccountMeta::new(*validator_list_storage, false),
     ];
     Instruction {
@@ -1053,6 +1061,7 @@ pub fn cleanup_removed_validator_entries(
 pub fn update_stake_pool(
     program_id: &Pubkey,
     stake_pool: &StakePool,
+    manager: &Pubkey,
     validator_list: &ValidatorList,
     stake_pool_address: &Pubkey,
     no_merge: bool,
@@ -1072,6 +1081,7 @@ pub fn update_stake_pool(
         update_list_instructions.push(update_validator_list_balance(
             program_id,
             stake_pool_address,
+            manager,
             &withdraw_authority,
             &stake_pool.validator_list,
             &stake_pool.reserve_stake,
@@ -1087,6 +1097,7 @@ pub fn update_stake_pool(
         update_stake_pool_balance(
             program_id,
             stake_pool_address,
+            manager,
             &withdraw_authority,
             &stake_pool.validator_list,
             &stake_pool.reserve_stake,
@@ -1098,6 +1109,7 @@ pub fn update_stake_pool(
         cleanup_removed_validator_entries(
             program_id,
             stake_pool_address,
+            manager,
             &stake_pool.validator_list,
         ),
     ];

@@ -1492,6 +1492,7 @@ impl Processor {
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
         let withdraw_authority_info = next_account_info(account_info_iter)?;
         let validator_list_info = next_account_info(account_info_iter)?;
         let reserve_stake_info = next_account_info(account_info_iter)?;
@@ -1506,6 +1507,7 @@ impl Processor {
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
+        stake_pool.check_manager(manager_info)?;
         stake_pool.check_validator_list(validator_list_info)?;
         stake_pool.check_authority_withdraw(
             withdraw_authority_info.key,
@@ -1739,13 +1741,14 @@ impl Processor {
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
         let withdraw_info = next_account_info(account_info_iter)?;
         let validator_list_info = next_account_info(account_info_iter)?;
         let reserve_stake_info = next_account_info(account_info_iter)?;
         let manager_fee_info = next_account_info(account_info_iter)?;
         let pool_mint_info = next_account_info(account_info_iter)?;
-        let treasury_info = next_account_info(account_info_iter)?;
-        let token_program_info = next_account_info(account_info_iter)?;
+        let treasury_fee_info = next_account_info(account_info_iter)?;
+        let token_program_info = next_account_info(account_info_iter)?;     
 
         let clock = Clock::get()?;
 
@@ -1755,12 +1758,12 @@ impl Processor {
             return Err(StakePoolError::InvalidState.into());
         }
 
+        stake_pool.check_manager(manager_info)?;
         stake_pool.check_mint(pool_mint_info)?;
         stake_pool.check_authority_withdraw(withdraw_info.key, program_id, stake_pool_info.key)?;
         stake_pool.check_reserve_stake(reserve_stake_info)?;
-        if stake_pool.manager_fee_account != *manager_fee_info.key {
-            return Err(StakePoolError::InvalidFeeAccount.into());
-        }
+        stake_pool.check_manager_fee(manager_fee_info)?;
+        stake_pool.check_treasury_fee(treasury_fee_info)?;
 
         if *validator_list_info.key != stake_pool.validator_list {
             return Err(StakePoolError::InvalidValidatorStakeList.into());
@@ -1807,14 +1810,9 @@ impl Processor {
 
             let reward_lamports = total_lamports.saturating_sub(previous_lamports);
 
-            // If the manager fee info is invalid, they don't deserve to receive the fee.
-            let epoch_fee = if stake_pool.check_manager_fee_info(manager_fee_info).is_ok() {
-                stake_pool
+            let epoch_fee = stake_pool
                     .calc_pool_tokens_epoch_fee(reward_lamports)
-                    .ok_or(StakePoolError::CalculationFailure)?
-            } else {
-                0
-            };
+                    .ok_or(StakePoolError::CalculationFailure)?;
             if epoch_fee > 0 {
                 Self::token_mint_to(
                     stake_pool_info.key,
@@ -1836,7 +1834,7 @@ impl Processor {
                     stake_pool_info.key,
                     token_program_info.clone(),
                     pool_mint_info.clone(),
-                    treasury_info.clone(),
+                    treasury_fee_info.clone(),
                     withdraw_info.clone(),
                     AUTHORITY_WITHDRAW,
                     stake_pool.stake_withdraw_bump_seed,
@@ -1891,6 +1889,7 @@ impl Processor {
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
         let validator_list_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
@@ -1898,6 +1897,8 @@ impl Processor {
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
+        
+        stake_pool.check_manager(manager_info)?;
         stake_pool.check_validator_list(validator_list_info)?;
 
         check_account_owner(validator_list_info, program_id)?;
@@ -1955,13 +1956,10 @@ impl Processor {
         stake_pool.check_mint(pool_mint_info)?;
         stake_pool.check_validator_list(validator_list_info)?;
         stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+        stake_pool.check_manager_fee(manager_fee_info)?;
 
         if stake_pool.token_program_id != *token_program_info.key {
             return Err(ProgramError::IncorrectProgramId);
-        }
-
-        if stake_pool.manager_fee_account != *manager_fee_info.key {
-            return Err(StakePoolError::InvalidFeeAccount.into());
         }
 
         check_account_owner(validator_list_info, program_id)?;
@@ -2216,15 +2214,12 @@ impl Processor {
         stake_pool.check_sol_deposit_authority(sol_deposit_authority_info)?;
         stake_pool.check_mint(pool_mint_info)?;
         stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+        stake_pool.check_manager_fee(manager_fee_info)?;
 
         if stake_pool.token_program_id != *token_program_info.key {
             return Err(ProgramError::IncorrectProgramId);
         }
         check_system_program(system_program_info.key)?;
-
-        if stake_pool.manager_fee_account != *manager_fee_info.key {
-            return Err(StakePoolError::InvalidFeeAccount.into());
-        }
 
         if deposit_lamports < MINIMUM_DEPOSIT {
             return Err(StakePoolError::DepositTooSmall.into());
@@ -2362,10 +2357,8 @@ impl Processor {
             program_id,
             stake_pool_info.key,
         )?;
+        stake_pool.check_manager_fee(manager_fee_info)?;
 
-        if stake_pool.manager_fee_account != *manager_fee_info.key {
-            return Err(StakePoolError::InvalidFeeAccount.into());
-        }
         if stake_pool.token_program_id != *token_program_info.key {
             return Err(ProgramError::IncorrectProgramId);
         }
@@ -2378,11 +2371,7 @@ impl Processor {
             return Err(StakePoolError::InvalidState.into());
         }
 
-        // To prevent a faulty manager fee account from preventing withdrawals
-        // if the token program does not own the account, or if the account is not initialized
-        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key
-            || stake_pool.check_manager_fee_info(manager_fee_info).is_err()
-        {
+        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key {
             0
         } else {
             stake_pool
@@ -2601,21 +2590,14 @@ impl Processor {
         stake_pool.check_sol_withdraw_authority(sol_withdraw_authority_info)?;
         stake_pool.check_mint(pool_mint_info)?;
         stake_pool.check_reserve_stake(reserve_stake_info)?;
+        stake_pool.check_manager_fee(manager_fee_info)?;
 
         if stake_pool.token_program_id != *token_program_info.key {
             return Err(ProgramError::IncorrectProgramId);
         }
         check_stake_program(stake_program_info.key)?;
 
-        if stake_pool.manager_fee_account != *manager_fee_info.key {
-            return Err(StakePoolError::InvalidFeeAccount.into());
-        }
-
-        // To prevent a faulty manager fee account from preventing withdrawals
-        // if the token program does not own the account, or if the account is not initialized
-        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key
-            || stake_pool.check_manager_fee_info(manager_fee_info).is_err()
-        {
+        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key {
             0
         } else {
             stake_pool
@@ -3303,15 +3285,12 @@ impl Processor {
         stake_pool.check_sol_deposit_authority(sol_deposit_authority_info)?;
         stake_pool.check_mint(pool_mint_info)?;
         stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+        stake_pool.check_manager_fee(manager_fee_info)?;
 
         if stake_pool.token_program_id != *token_program_info.key {
             return Err(ProgramError::IncorrectProgramId);
         }
         check_system_program(system_program_info.key)?;
-
-        if stake_pool.manager_fee_account != *manager_fee_info.key {
-            return Err(StakePoolError::InvalidFeeAccount.into());
-        }
 
         if !owner_wallet_info.is_signer {
             return Err(StakePoolError::SignatureMissing.into());
@@ -3487,15 +3466,12 @@ impl Processor {
         stake_pool.check_sol_withdraw_authority(sol_withdraw_authority_info)?;
         stake_pool.check_mint(pool_mint_info)?;
         stake_pool.check_reserve_stake(reserve_stake_info)?;
+        stake_pool.check_manager_fee(manager_fee_info)?;
 
         if stake_pool.token_program_id != *token_program_info.key {
             return Err(ProgramError::IncorrectProgramId);
         }
         check_stake_program(stake_program_info.key)?;
-
-        if stake_pool.manager_fee_account != *manager_fee_info.key {
-            return Err(StakePoolError::InvalidFeeAccount.into());
-        }
 
         if !owner_wallet_info.is_signer {
             return Err(StakePoolError::SignatureMissing.into());
@@ -3531,19 +3507,7 @@ impl Processor {
         community_token_staking_rewards.set_last_rewarded_epoch(epoch);
         community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
-
-
-// TODO TODO TODO  ЕСЛИ ВСЕ токены сняты, то снять солы с ээтого аккаунта и перевести юзеру.!!!!!!!!!!!!!!!!! 
-// TODO TODO TODO  ЕСЛИ ВСЕ токены сняты и нет токенов коммьюнити, СНЯТЬ СОЛЫ С ATA для юзера
-
-
-
-
-        // To prevent a faulty manager fee account from preventing withdrawals
-        // if the token program does not own the account, or if the account is not initialized
-        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key
-            || stake_pool.check_manager_fee_info(manager_fee_info).is_err()
-        {
+        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key {
             0
         } else {
             stake_pool
@@ -3671,10 +3635,8 @@ impl Processor {
             program_id,
             stake_pool_info.key,
         )?;
+        stake_pool.check_manager_fee(manager_fee_info)?;
 
-        if stake_pool.manager_fee_account != *manager_fee_info.key {
-            return Err(StakePoolError::InvalidFeeAccount.into());
-        }
         if stake_pool.token_program_id != *token_program_info.key {
             return Err(ProgramError::IncorrectProgramId);
         }
@@ -3721,20 +3683,7 @@ impl Processor {
         community_token_staking_rewards.set_last_rewarded_epoch(clock.epoch);
         community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
-
-
-// TODO TODO TODO  ЕСЛИ ВСЕ токены сняты, то снять солы с ээтого аккаунта и перевести юзеру.!!!!!!!!!!!!!!!!! 
-// TODO TODO TODO  ЕСЛИ ВСЕ токены сняты и нет токенов коммьюнити, СНЯТЬ СОЛЫ С ATA для юзера
-
-
-
-
-
-        // To prevent a faulty manager fee account from preventing withdrawals
-        // if the token program does not own the account, or if the account is not initialized
-        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key
-            || stake_pool.check_manager_fee_info(manager_fee_info).is_err()
-        {
+        let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key {
             0
         } else {
             stake_pool
@@ -3959,13 +3908,10 @@ impl Processor {
         stake_pool.check_mint(pool_mint_info)?;
         stake_pool.check_validator_list(validator_list_info)?;
         stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+        stake_pool.check_manager_fee(manager_fee_info)?;
 
         if stake_pool.token_program_id != *token_program_info.key {
             return Err(ProgramError::IncorrectProgramId);
-        }
-
-        if stake_pool.manager_fee_account != *manager_fee_info.key {
-            return Err(StakePoolError::InvalidFeeAccount.into());
         }
 
         check_account_owner(validator_list_info, program_id)?;
@@ -4590,7 +4536,7 @@ impl PrintProgramError for StakePoolError {
             StakePoolError::WrongManager => msg!("Error: Wrong pool manager account"),
             StakePoolError::SignatureMissing => msg!("Error: Required signature is missing"),
             StakePoolError::InvalidValidatorStakeList => msg!("Error: Invalid validator stake list account"),
-            StakePoolError::InvalidFeeAccount => msg!("Error: Invalid manager fee account"),
+            StakePoolError::InvalidManagerFeeAccount => msg!("Error: Invalid manager fee account"),
             StakePoolError::WrongPoolMint => msg!("Error: Specified pool mint account is wrong"),
             StakePoolError::WrongStakeState => msg!("Error: Stake account is not in the state expected by the program"),
             StakePoolError::UserStakeNotActive => msg!("Error: User stake is not active"),
@@ -4626,6 +4572,7 @@ impl PrintProgramError for StakePoolError {
             StakePoolError::DataDoesNotExist => msg!("Error: Data does not exist in account, but should exists. It is mean account does not exist."),
             StakePoolError::DataAlreadyExists => msg!("Error: Data exists in account, but should not exists. It is mean account exist."),
             StakePoolError::InvalidEpoch => msg!("Error: Invalid epoch."),
+            StakePoolError::InvalidTreasuryFeeAccount => msg!("Error: Invalid treasury fee account"),
         }
     }
 }

@@ -293,17 +293,36 @@ impl StakePool {
 
     /// Check if the manager fee info is a valid token program account
     /// capable of receiving tokens from the mint.
-    pub(crate) fn check_manager_fee_info(
+    pub(crate) fn check_manager_fee(
         &self,
         manager_fee_info: &AccountInfo,
     ) -> Result<(), ProgramError> {
         let token_account = Account::unpack(&manager_fee_info.data.borrow())?;
         if manager_fee_info.owner != &self.token_program_id
+            || *manager_fee_info.key != self.manager_fee_account
             || token_account.state != AccountState::Initialized
             || token_account.mint != self.pool_mint
         {
-            msg!("Manager fee account is not owned by token program, is not initialized, or does not match stake pool's mint");
-            return Err(StakePoolError::InvalidFeeAccount.into());
+            msg!("Manager fee account is not owned by token program, is not valid, is not initialized, or does not match stake pool's mint");
+            return Err(StakePoolError::InvalidManagerFeeAccount.into());
+        }
+        Ok(())
+    }
+
+    /// Check if the treasury fee info is a valid token program account
+    /// capable of receiving tokens from the mint.
+    pub(crate) fn check_treasury_fee(
+        &self,
+        treasury_fee_info: &AccountInfo,
+    ) -> Result<(), ProgramError> {
+        let token_account = Account::unpack(&treasury_fee_info.data.borrow())?;
+        if treasury_fee_info.owner != &self.token_program_id
+            || *treasury_fee_info.key != self.treasury_fee_account
+            || token_account.state != AccountState::Initialized
+            || token_account.mint != self.pool_mint
+        {
+            msg!("Treasury fee account is not owned by token program, is not valid, is not initialized, or does not match stake pool's mint");
+            return Err(StakePoolError::InvalidTreasuryFeeAccount.into());
         }
         Ok(())
     }

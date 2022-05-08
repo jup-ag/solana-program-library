@@ -308,7 +308,7 @@ async fn fail_with_wrong_pool_fee_account() {
             _,
             InstructionError::Custom(error_index),
         ) => {
-            let program_error = StakePoolError::InvalidFeeAccount as u32;
+            let program_error = StakePoolError::InvalidManagerFeeAccount as u32;
             assert_eq!(error_index, program_error);
         }
         _ => panic!("Wrong error occurs while try to update pool balance with wrong validator stake list account"),

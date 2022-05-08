@@ -38,8 +38,8 @@ pub enum StakePoolError {
     #[error("InvalidValidatorStakeList")]
     InvalidValidatorStakeList,
     /// Invalid manager fee account.
-    #[error("InvalidFeeAccount")]
-    InvalidFeeAccount,
+    #[error("InvalidManagerFeeAccount")]
+    InvalidManagerFeeAccount,
 
     // 10.
     /// Specified pool mint account is wrong.
@@ -153,6 +153,9 @@ pub enum StakePoolError {
     /// Invalid epoch
     #[error("InvalidEpoch")]
     InvalidEpoch,
+    /// Invalid treasury fee account.
+    #[error("InvalidTreasuryFeeAccount")]
+    InvalidTreasuryFeeAccount,
 }
 impl From<StakePoolError> for ProgramError {
     fn from(e: StakePoolError) -> Self {

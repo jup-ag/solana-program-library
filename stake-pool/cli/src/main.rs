@@ -2053,6 +2053,7 @@ fn command_update(
         spl_stake_pool::instruction::update_stake_pool(
             &spl_stake_pool::id(),
             &stake_pool,
+            &config.manager.pubkey(),
             &validator_list,
             stake_pool_address,
             no_merge,
@@ -2082,7 +2083,10 @@ fn command_update(
     let transaction = checked_transaction_with_signers(
         config,
         &final_instructions,
-        &[config.fee_payer.as_ref()],
+        &[
+            config.fee_payer.as_ref(),
+            config.manager.as_ref()
+        ],
     )?;
     send_transaction(config, transaction)?;
 
