@@ -242,8 +242,8 @@ async fn setup(
     );
     program_test.add_account(stake_pool_accounts.pool_mint.pubkey(), stake_pool_mint);
 
-    let mut fee_account_vec = vec![0u8; SplAccount::LEN];
-    let fee_account_data = SplAccount {
+    let mut manager_fee_account_vec = vec![0u8; SplAccount::LEN];
+    let manager_fee_account_data = SplAccount {
         mint: stake_pool_accounts.pool_mint.pubkey(),
         owner: stake_pool_accounts.manager.pubkey(),
         amount: 0,
@@ -253,15 +253,37 @@ async fn setup(
         delegated_amount: 0,
         close_authority: COption::None,
     };
-    Pack::pack(fee_account_data, &mut fee_account_vec).unwrap();
-    let fee_account = Account::create(
+    Pack::pack(manager_fee_account_data, &mut manager_fee_account_vec).unwrap();
+    let manager_fee_account = Account::create(
         ACCOUNT_RENT_EXEMPTION,
-        fee_account_vec,
+        manager_fee_account_vec,
         spl_token::id(),
         false,
         Epoch::default(),
     );
-    program_test.add_account(stake_pool_accounts.pool_fee_account.pubkey(), fee_account);
+
+    let mut treasury_fee_account_vec = vec![0u8; SplAccount::LEN];
+    let treasury_fee_account_data = SplAccount {
+        mint: stake_pool_accounts.pool_mint.pubkey(),
+        owner: stake_pool_accounts.manager.pubkey(),
+        amount: 0,
+        delegate: COption::None,
+        state: SplAccountState::Initialized,
+        is_native: COption::None,
+        delegated_amount: 0,
+        close_authority: COption::None,
+    };
+    Pack::pack(treasury_fee_account_data, &mut treasury_fee_account_vec).unwrap();
+    let treasury_fee_account = Account::create(
+        ACCOUNT_RENT_EXEMPTION,
+        treasury_fee_account_vec,
+        spl_token::id(),
+        false,
+        Epoch::default(),
+    );
+
+    program_test.add_account(stake_pool_accounts.pool_fee_account.pubkey(), manager_fee_account);
+    program_test.add_account(stake_pool_accounts.treasury_fee_account.pubkey(), treasury_fee_account);
 
     let mut context = program_test.start_with_context().await;
 
@@ -376,7 +398,7 @@ async fn update() {
         .await
         .err();
 
-    assert!(error.is_none());   // TODO TODO TODO
+    assert!(error.is_none());
 
     let transaction = Transaction::new_signed_with_payer(
         &[instruction::cleanup_removed_validator_entries(
@@ -750,7 +772,7 @@ async fn withdraw() {
             &pool_account_pubkey,
             &stake_address,
             &user.pubkey(),
-            STAKE_AMOUNT,
+            STAKE_AMOUNT,       // StakePool::calculate_deposit_amount_by_reward_simulation(STAKE_AMOUNT).unwrap(),
         )
         .await;
     assert!(error.is_none(), "{:?}", error);

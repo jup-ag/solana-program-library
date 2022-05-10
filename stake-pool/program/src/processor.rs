@@ -1867,7 +1867,7 @@ impl Processor {
             let pool_mint = Mint::unpack_from_slice(&pool_mint_info.data.borrow())?;
             stake_pool.pool_token_supply = pool_mint.supply;
 
-            stake_pool.rate_of_exchange = if stake_pool.total_lamports == stake_pool.pool_token_supply    // TODO  TODO TODO TODO TODO Если 1 лампорт и 2 токена !!!!!!!!!!!!!!!!!
+            stake_pool.rate_of_exchange = if stake_pool.total_lamports == stake_pool.pool_token_supply
             || stake_pool.pool_token_supply == 0
             || stake_pool.total_lamports == 0
             {
