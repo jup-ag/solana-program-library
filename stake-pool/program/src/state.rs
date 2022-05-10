@@ -166,6 +166,11 @@ pub struct StakePool {
     pub total_lamports_liquidity: u64,
 }
 impl StakePool {
+    /// 0.060144% - numerator of validator yield per epoch for validator 8% APY with 128 epochs in year.
+    const VALIDATOR_YIELD_PER_EPOCH_NUMERATOR: u64 = 60144;
+    /// 0.060144% - denominator of validator yield per epoch for validator 8% APY with 128 epochs in year.
+    const VALIDATOR_YIELD_PER_EPOCH_DENOMINATOR: u64 = 100_000_000;
+
     /// calculate the pool tokens that should be minted from lamports
     #[inline]
     pub fn convert_amount_of_lamports_to_amount_of_pool_tokens(
@@ -504,6 +509,17 @@ impl StakePool {
             FeeType::Treasury(new_fee) => self.treasury_fee = *new_fee,
         };
         Ok(())
+    }
+
+    /// Calculates the amount of SOL that the user would have paid before applying the APY retention strategy. 
+    /// From this amount, you need to take DepositFee, if it is installed.
+    pub fn calculate_deposit_amount_by_reward_simulation(amount: u64) -> Option<u64> {
+        u64::try_from(
+            (amount as u128)
+                .checked_mul((Self::VALIDATOR_YIELD_PER_EPOCH_DENOMINATOR - Self::VALIDATOR_YIELD_PER_EPOCH_NUMERATOR) as u128)?
+                .checked_div(Self::VALIDATOR_YIELD_PER_EPOCH_DENOMINATOR as u128)?,
+
+        ).ok()
     }
 }
 

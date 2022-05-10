@@ -2065,10 +2065,16 @@ impl Processor {
             .ok_or(StakePoolError::CalculationFailure)?;
 
         let new_pool_tokens = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(total_deposit_lamports)
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(
+                StakePool::calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
+                .ok_or(StakePoolError::CalculationFailure)?
+            )
             .ok_or(StakePoolError::CalculationFailure)?;
         let new_pool_tokens_from_stake = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(
+                StakePool::calculate_deposit_amount_by_reward_simulation(stake_deposit_lamports)
+                .ok_or(StakePoolError::CalculationFailure)?
+            )
             .ok_or(StakePoolError::CalculationFailure)?;
         let new_pool_tokens_from_sol = new_pool_tokens
             .checked_sub(new_pool_tokens_from_stake)
@@ -2230,7 +2236,10 @@ impl Processor {
         }
 
         let new_pool_tokens = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(
+                StakePool::calculate_deposit_amount_by_reward_simulation(deposit_lamports)
+                .ok_or(StakePoolError::CalculationFailure)?
+            )
             .ok_or(StakePoolError::CalculationFailure)?;
 
         if new_pool_tokens == 0 {
@@ -3335,7 +3344,10 @@ impl Processor {
         community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         let new_pool_tokens = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(
+                StakePool::calculate_deposit_amount_by_reward_simulation(deposit_lamports)
+                .ok_or(StakePoolError::CalculationFailure)?
+            )
             .ok_or(StakePoolError::CalculationFailure)?;
 
         if new_pool_tokens == 0 {
@@ -4051,10 +4063,16 @@ impl Processor {
             .ok_or(StakePoolError::CalculationFailure)?;
 
         let new_pool_tokens = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(total_deposit_lamports)
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(
+                StakePool::calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
+                .ok_or(StakePoolError::CalculationFailure)?
+            )
             .ok_or(StakePoolError::CalculationFailure)?;
         let new_pool_tokens_from_stake = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(
+                StakePool::calculate_deposit_amount_by_reward_simulation(stake_deposit_lamports)
+                .ok_or(StakePoolError::CalculationFailure)?
+            )
             .ok_or(StakePoolError::CalculationFailure)?;
         let new_pool_tokens_from_sol = new_pool_tokens
             .checked_sub(new_pool_tokens_from_stake)
