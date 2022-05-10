@@ -92,7 +92,7 @@ async fn success() {
         .await;
     assert!(error.is_none());
 
-    let tokens_issued = TEST_STAKE_AMOUNT; // For now tokens are 1:1 to stake
+    let tokens_issued = state::StakePool::calculate_deposit_amount_by_reward_simulation(TEST_STAKE_AMOUNT).unwrap(); // For now tokens are 1:1 to stake
 
     // Stake pool should add its balance to the pool balance
     let post_stake_pool = get_account(
@@ -427,7 +427,9 @@ async fn success_with_referral_fee() {
     let referrer_balance_post =
         get_token_balance(&mut context.banks_client, &referrer_token_account.pubkey()).await;
     let referral_fee = stake_pool_accounts.calculate_sol_referral_fee(
-        stake_pool_accounts.calculate_sol_deposit_fee(TEST_STAKE_AMOUNT),
+        stake_pool_accounts.calculate_sol_deposit_fee(
+            state::StakePool::calculate_deposit_amount_by_reward_simulation(TEST_STAKE_AMOUNT).unwrap()
+        ),
     );
     assert!(referral_fee > 0);
     assert_eq!(referrer_balance_pre + referral_fee, referrer_balance_post);

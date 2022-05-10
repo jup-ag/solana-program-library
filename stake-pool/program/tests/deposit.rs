@@ -190,7 +190,7 @@ async fn success() {
         .expect("get_account")
         .is_none());
 
-    let tokens_issued = stake_lamports; // For now tokens are 1:1 to stake
+    let tokens_issued = state::StakePool::calculate_deposit_amount_by_reward_simulation(stake_lamports).unwrap(); // For now tokens are 1:1 to stake
 
     // Stake pool should add its balance to the pool balance
     let post_stake_pool = get_account(
@@ -203,7 +203,7 @@ async fn success() {
     assert_eq!(
         post_stake_pool.total_lamports,
         pre_stake_pool.total_lamports + stake_lamports
-    );
+    );    
     assert_eq!(
         post_stake_pool.pool_token_supply,
         pre_stake_pool.pool_token_supply + tokens_issued
@@ -217,7 +217,9 @@ async fn success() {
             .calc_pool_tokens_sol_deposit_fee(stake_rent)
             .unwrap()
         - post_stake_pool
-            .calc_pool_tokens_stake_deposit_fee(stake_lamports - stake_rent)
+            .calc_pool_tokens_stake_deposit_fee(
+                state::StakePool::calculate_deposit_amount_by_reward_simulation(stake_lamports).unwrap() - stake_rent
+            )
             .unwrap();
     assert_eq!(user_token_balance, tokens_issued_user);
 
@@ -251,7 +253,6 @@ async fn success() {
         post_validator_stake_item.stake_lamports()
     );
     assert_eq!(post_validator_stake_item.transient_stake_lamports, 0);
-
     // Check reserve
     let post_reserve_lamports = get_account(
         &mut context.banks_client,
@@ -361,7 +362,7 @@ async fn success_with_extra_stake_lamports() {
         .expect("get_account")
         .is_none());
 
-    let tokens_issued = stake_lamports + extra_lamports;
+    let tokens_issued = state::StakePool::calculate_deposit_amount_by_reward_simulation(stake_lamports + extra_lamports).unwrap();
     // For now tokens are 1:1 to stake
 
     // Stake pool should add its balance to the pool balance
@@ -390,10 +391,14 @@ async fn success_with_extra_stake_lamports() {
         get_token_balance(&mut context.banks_client, &pool_token_account).await;
 
     let fee_tokens = post_stake_pool
-        .calc_pool_tokens_sol_deposit_fee(extra_lamports + stake_rent)
+        .calc_pool_tokens_sol_deposit_fee(
+            state::StakePool::calculate_deposit_amount_by_reward_simulation(extra_lamports).unwrap() + stake_rent
+        )
         .unwrap()
         + post_stake_pool
-            .calc_pool_tokens_stake_deposit_fee(stake_lamports - stake_rent)
+            .calc_pool_tokens_stake_deposit_fee(
+                state::StakePool::calculate_deposit_amount_by_reward_simulation(stake_lamports).unwrap() - stake_rent
+            )
             .unwrap();
     let tokens_issued_user = tokens_issued - fee_tokens;
     assert_eq!(user_token_balance, tokens_issued_user);
@@ -955,7 +960,9 @@ async fn success_with_referral_fee() {
         .calc_pool_tokens_sol_deposit_fee(stake_rent)
         .unwrap()
         + stake_pool
-            .calc_pool_tokens_stake_deposit_fee(stake_lamports - stake_rent)
+            .calc_pool_tokens_stake_deposit_fee(
+                state::StakePool::calculate_deposit_amount_by_reward_simulation(stake_lamports).unwrap() - stake_rent
+            )
             .unwrap();
     let referral_fee = stake_pool_accounts.calculate_referral_fee(fee_tokens);
     assert!(referral_fee > 0);
