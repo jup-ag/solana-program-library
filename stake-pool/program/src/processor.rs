@@ -4392,26 +4392,11 @@ impl Processor {
             return Err(StakePoolError::NonZeroTokenBalance.into());
         }
 
-        invoke_signed(
-            &system_instruction::transfer(
-                &community_token_staking_rewards_pubkey,
-                manager_info.key,
-                community_token_staking_rewards_dto_info.lamports()
-            ),
-            &[
-                community_token_staking_rewards_dto_info.clone(),
-                manager_info.clone()
-            ],
-            &[
-                &[
-                    CommunityTokenStakingRewards::SEED_PREFIX,
-                    &stake_pool_info.key.to_bytes()[..],
-                    &user_wallet_info.key.to_bytes()[..],
-                    &program_id.to_bytes()[..],
-                    &[bump_seed],
-                ]
-            ]
-        )?;
+        **manager_info.lamports.borrow_mut() = manager_info
+            .lamports()
+            .checked_add(community_token_staking_rewards_dto_info.lamports())
+            .ok_or(StakePoolError::CalculationFailure)?;
+        **community_token_staking_rewards_dto_info.lamports.borrow_mut() = 0;
 
         Ok(())
     }

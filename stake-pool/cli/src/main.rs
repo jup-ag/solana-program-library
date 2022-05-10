@@ -3848,10 +3848,6 @@ fn command_dao_strategy_distribute_community_tokens(
     config: &Config,
     stake_pool_address: &Pubkey,
 ) -> CommandResult {
-    if !config.no_update {
-        command_update(config, stake_pool_address, false, false)?;
-    }
-
     let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
     let dao_state_dto_account = config
         .rpc_client
