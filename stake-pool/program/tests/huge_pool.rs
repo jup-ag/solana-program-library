@@ -333,6 +333,7 @@ async fn update() {
         &[instruction::update_validator_list_balance(
             &id(),
             &stake_pool_accounts.stake_pool.pubkey(),
+            &stake_pool_accounts.manager.pubkey(),
             &stake_pool_accounts.withdraw_authority,
             &stake_pool_accounts.validator_list.pubkey(),
             &stake_pool_accounts.reserve_stake.pubkey(),
@@ -342,7 +343,7 @@ async fn update() {
             /* no_merge = */ false,
         )],
         Some(&context.payer.pubkey()),
-        &[&context.payer],
+        &[&context.payer, &stake_pool_accounts.manager],
         context.last_blockhash,
     );
     let error = context
@@ -356,6 +357,7 @@ async fn update() {
         &[instruction::update_stake_pool_balance(
             &id(),
             &stake_pool_accounts.stake_pool.pubkey(),
+            &stake_pool_accounts.manager.pubkey(),
             &stake_pool_accounts.withdraw_authority,
             &stake_pool_accounts.validator_list.pubkey(),
             &stake_pool_accounts.reserve_stake.pubkey(),
@@ -364,8 +366,8 @@ async fn update() {
             &stake_pool_accounts.treasury_fee_account.pubkey(),
             &spl_token::id(),
         )],
-        Some(&context.payer.pubkey()),
-        &[&context.payer],
+        Some(&context.payer.pubkey()), 
+        &[&context.payer, &stake_pool_accounts.manager],
         context.last_blockhash,
     );
     let error = context
@@ -373,16 +375,18 @@ async fn update() {
         .process_transaction(transaction)
         .await
         .err();
-    assert!(error.is_none());
+
+    assert!(error.is_none());   // TODO TODO TODO
 
     let transaction = Transaction::new_signed_with_payer(
         &[instruction::cleanup_removed_validator_entries(
             &id(),
             &stake_pool_accounts.stake_pool.pubkey(),
+            &stake_pool_accounts.manager.pubkey(),
             &stake_pool_accounts.validator_list.pubkey(),
         )],
         Some(&context.payer.pubkey()),
-        &[&context.payer],
+        &[&context.payer, &stake_pool_accounts.manager],
         context.last_blockhash,
     );
     let error = context
@@ -505,10 +509,11 @@ async fn remove_validator_from_pool() {
         &[instruction::cleanup_removed_validator_entries(
             &id(),
             &stake_pool_accounts.stake_pool.pubkey(),
+            &stake_pool_accounts.manager.pubkey(),
             &stake_pool_accounts.validator_list.pubkey(),
         )],
         Some(&context.payer.pubkey()),
-        &[&context.payer],
+        &[&context.payer, &stake_pool_accounts.manager],
         context.last_blockhash,
     );
 

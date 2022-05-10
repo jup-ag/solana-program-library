@@ -726,6 +726,7 @@ async fn success_ignoring_hijacked_transient_stake() {
             instruction::update_validator_list_balance(
                 &id(),
                 &stake_pool_accounts.stake_pool.pubkey(),
+                &stake_pool_accounts.manager.pubkey(),
                 &stake_pool_accounts.withdraw_authority,
                 &stake_pool_accounts.validator_list.pubkey(),
                 &stake_pool_accounts.reserve_stake.pubkey(),
@@ -750,6 +751,7 @@ async fn success_ignoring_hijacked_transient_stake() {
             instruction::update_stake_pool_balance(
                 &id(),
                 &stake_pool_accounts.stake_pool.pubkey(),
+                &stake_pool_accounts.manager.pubkey(),
                 &stake_pool_accounts.withdraw_authority,
                 &stake_pool_accounts.validator_list.pubkey(),
                 &stake_pool_accounts.reserve_stake.pubkey(),
@@ -761,11 +763,12 @@ async fn success_ignoring_hijacked_transient_stake() {
             instruction::cleanup_removed_validator_entries(
                 &id(),
                 &stake_pool_accounts.stake_pool.pubkey(),
+                &stake_pool_accounts.manager.pubkey(),
                 &stake_pool_accounts.validator_list.pubkey(),
             ),
         ],
         Some(&context.payer.pubkey()),
-        &[&context.payer],
+        &[&context.payer, &stake_pool_accounts.manager],
         context.last_blockhash,
     );
     let error = context

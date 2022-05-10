@@ -1053,6 +1053,7 @@ impl StakePoolAccounts {
             &[instruction::update_validator_list_balance(
                 &id(),
                 &self.stake_pool.pubkey(),
+                &self.manager.pubkey(),
                 &self.withdraw_authority,
                 &self.validator_list.pubkey(),
                 &self.reserve_stake.pubkey(),
@@ -1062,7 +1063,7 @@ impl StakePoolAccounts {
                 no_merge,
             )],
             Some(&payer.pubkey()),
-            &[payer],
+            &[payer, &self.manager],
             *recent_blockhash,
         );
         #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
@@ -1083,6 +1084,7 @@ impl StakePoolAccounts {
             &[instruction::update_stake_pool_balance(
                 &id(),
                 &self.stake_pool.pubkey(),
+                &self.manager.pubkey(),
                 &self.withdraw_authority,
                 &self.validator_list.pubkey(),
                 &self.reserve_stake.pubkey(),
@@ -1092,7 +1094,7 @@ impl StakePoolAccounts {
                 &spl_token::id(),
             )],
             Some(&payer.pubkey()),
-            &[payer],
+            &[payer, &self.manager],
             *recent_blockhash,
         );
         #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
@@ -1113,10 +1115,11 @@ impl StakePoolAccounts {
             &[instruction::cleanup_removed_validator_entries(
                 &id(),
                 &self.stake_pool.pubkey(),
+                &self.manager.pubkey(),
                 &self.validator_list.pubkey(),
             )],
             Some(&payer.pubkey()),
-            &[payer],
+            &[payer, &self.manager],
             *recent_blockhash,
         );
         #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10
@@ -1141,6 +1144,7 @@ impl StakePoolAccounts {
                 instruction::update_validator_list_balance(
                     &id(),
                     &self.stake_pool.pubkey(),
+                    &self.manager.pubkey(),
                     &self.withdraw_authority,
                     &self.validator_list.pubkey(),
                     &self.reserve_stake.pubkey(),
@@ -1152,6 +1156,7 @@ impl StakePoolAccounts {
                 instruction::update_stake_pool_balance(
                     &id(),
                     &self.stake_pool.pubkey(),
+                    &self.manager.pubkey(),
                     &self.withdraw_authority,
                     &self.validator_list.pubkey(),
                     &self.reserve_stake.pubkey(),
@@ -1163,11 +1168,12 @@ impl StakePoolAccounts {
                 instruction::cleanup_removed_validator_entries(
                     &id(),
                     &self.stake_pool.pubkey(),
+                    &self.manager.pubkey(),
                     &self.validator_list.pubkey(),
                 ),
             ],
             Some(&payer.pubkey()),
-            &[payer],
+            &[payer, &self.manager],
             *recent_blockhash,
         );
         #[allow(clippy::useless_conversion)] // Remove during upgrade to 1.10

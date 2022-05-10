@@ -4377,8 +4377,7 @@ impl Processor {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let (community_token_staking_rewards_pubkey, bump_seed) = CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, user_wallet_info.key);
-        if *community_token_staking_rewards_dto_info.key != community_token_staking_rewards_pubkey {
+        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, user_wallet_info.key).0 {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if community_token_staking_rewards_dto_info.data_is_empty() 
