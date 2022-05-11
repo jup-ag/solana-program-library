@@ -296,6 +296,16 @@ async fn fail_with_wrong_pool_fee_account() {
         .unwrap();
 
     let wrong_fee_account = Keypair::new();
+    create_token_account(
+        &mut banks_client,
+        &payer,
+        &recent_blockhash,
+        &wrong_fee_account,
+        &stake_pool_accounts.pool_mint.pubkey(),
+        &stake_pool_accounts.manager.pubkey(),
+    )
+    .await
+    .unwrap();
     stake_pool_accounts.pool_fee_account = wrong_fee_account;
     let error = stake_pool_accounts
         .update_stake_pool_balance(&mut banks_client, &payer, &recent_blockhash)
@@ -311,7 +321,7 @@ async fn fail_with_wrong_pool_fee_account() {
             let program_error = StakePoolError::InvalidManagerFeeAccount as u32;
             assert_eq!(error_index, program_error);
         }
-        _ => panic!("Wrong error occurs while try to update pool balance with wrong validator stake list account"),
+        _ => panic!("Wrong error occurs while try to update pool balance with wrong manager fee account"),
     }
 }
 

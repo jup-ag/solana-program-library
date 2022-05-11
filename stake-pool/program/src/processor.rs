@@ -4625,9 +4625,7 @@ impl PrintProgramError for StakePoolError {
             StakePoolError::InvalidStakeAccountAddress => msg!("Error: Stake account address not properly derived from the validator address"),
             StakePoolError::StakeListOutOfDate => msg!("Error: Identify validator stake accounts with old balances and update them"),
             StakePoolError::StakeListAndPoolOutOfDate => msg!("Error: First update old validator stake account balances and then pool stake balance"),
-            StakePoolError::UnknownValidatorStakeAccount => {
-                msg!("Error: Validator stake account is not found in the list storage")
-            }
+            StakePoolError::UnknownValidatorStakeAccount => msg!("Error: Validator stake account is not found in the list storage"),
             StakePoolError::WrongMintingAuthority => msg!("Error: Wrong minting authority set for mint pool account"),
             StakePoolError::UnexpectedValidatorListAccountSize=> msg!("Error: The size of the given validator stake list does match the expected amount"),
             StakePoolError::WrongStaker=> msg!("Error: Wrong pool staker account"),
