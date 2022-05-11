@@ -5,6 +5,10 @@ use {
     solana_sdk::{pubkey::Pubkey, stake::state::Lockup},
     spl_stake_pool::state::{Fee, StakePool, StakeStatus, ValidatorList, ValidatorStakeInfo},
     std::fmt::{Display, Formatter, Result, Write},
+    super::{ ValidatorsInfo, ValidatorsDataVec, ValidatorsData,
+        VALIDATOR_MAXIMUM_FEE, VALIDATOR_MAXIMUM_SKIPPED_SLOTS, VALIDATOR_MINIMUM_APY, VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE,
+        VALIDATORS_OFFSET, VALIDATORS_QUANTITY, VALIDATORS_QUERY_SIZE,
+    }
 };
 
 #[derive(Serialize, Deserialize)]
@@ -547,5 +551,92 @@ impl From<(Pubkey, StakePool, ValidatorList, Pubkey)> for CliStakePool {
             last_epoch_total_lamports: stake_pool.last_epoch_total_lamports,
             details: None,
         }
+    }
+}
+
+impl VerboseDisplay for ValidatorsData {
+    fn write_str(&self, w: &mut dyn Write) -> Result {
+        write!(w, "name: {}, APY: {}, vote: {}, node: {}, stake: {}", 
+            self.name, self.apy, self.vote_pk, self.node_pk, self.total_active_stake)?;
+        if self.drop_reasons.is_some() {
+            write!(w, " drop reasons: {:?}", self.drop_reasons.as_ref().unwrap())?;
+        }
+        Ok(())
+    }    
+}
+
+impl Display for ValidatorsData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "name: {}, APY: {}, vote: {}", 
+            self.name, self.apy, self.vote_pk)?;
+        if self.drop_reasons.is_some() {
+            write!(f, " drop reasons: {:?}", self.drop_reasons.as_ref().unwrap())?;
+        }
+        Ok(())
+    }
+}
+
+impl VerboseDisplay for ValidatorsDataVec {
+    fn write_str(&self, w: &mut dyn Write) -> Result {
+        writeln!(w, "==========================================================")?; 
+        if self.desc.is_some() {   
+            writeln!(w, "{}", self.desc.as_ref().unwrap())?;
+            writeln!(w, "==========================================================")?;
+        }
+
+        for (i, validator_data) in self.vec.iter().enumerate() {
+            write!(w, "{}. ", i+1)?;
+            VerboseDisplay::write_str(validator_data, w)?;
+            writeln!(w)?;
+        }
+        writeln!(w)?;
+        Ok(())        
+    }
+}
+
+impl Display for ValidatorsDataVec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        writeln!(f, "==========================================================")?; 
+        if self.desc.is_some() {
+            writeln!(f, "{}", self.desc.as_ref().unwrap())?;
+            writeln!(f, "==========================================================")?;
+        }
+        for (i, validator_data) in self.vec.iter().enumerate() {
+            writeln!(f, "{}. {}", i+1, validator_data)?
+        }
+        Ok(())
+    }
+}
+
+impl VerboseDisplay for ValidatorsInfo {
+    fn write_str(&self, w: &mut dyn Write) -> Result {
+        VerboseDisplay::write_str(&self.current_validators, w)?;
+        VerboseDisplay::write_str(&self.potential_validators, w)?;
+        VerboseDisplay::write_str(&self.validators_to_be_added, w)?;
+        VerboseDisplay::write_str(&self.validators_to_be_removed, w)?;
+
+        //Print Constants
+        writeln!(w, "==========================================================")?;
+        writeln!(w, "Validators config")?;
+        writeln!(w, "==========================================================")?;
+        writeln!(w, "VALIDATOR_MAXIMUM_FEE {}", VALIDATOR_MAXIMUM_FEE)?;
+        writeln!(w, "VALIDATOR_MAXIMUM_SKIPPED_SLOTS {}", VALIDATOR_MAXIMUM_SKIPPED_SLOTS)?;
+        writeln!(w, "VALIDATOR_MINIMUM_APY {}", VALIDATOR_MINIMUM_APY)?;
+        writeln!(w, "VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE {}", VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE)?;
+        writeln!(w, "VALIDATORS_QUANTITY {}", VALIDATORS_QUANTITY)?;
+        writeln!(w, "VALIDATORS_QUERY_SIZE {}", VALIDATORS_QUERY_SIZE)?;
+        writeln!(w, "VALIDATORS_OFFSET {}", VALIDATORS_OFFSET)?;
+        Ok(())
+    }
+}
+
+impl QuietDisplay for ValidatorsInfo {}
+impl Display for ValidatorsInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        writeln!(f, "{}", self.current_validators)?;
+        writeln!(f, "{}", self.potential_validators)?;
+        writeln!(f, "{}", self.validators_to_be_added)?;
+        writeln!(f, "{}", self.validators_to_be_removed)?;
+        Ok(())
     }
 }
