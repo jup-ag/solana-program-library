@@ -772,7 +772,7 @@ async fn withdraw() {
             &pool_account_pubkey,
             &stake_address,
             &user.pubkey(),
-            STAKE_AMOUNT,       // StakePool::calculate_deposit_amount_by_reward_simulation(STAKE_AMOUNT).unwrap(),
+            StakePool::calculate_deposit_amount_by_reward_simulation(STAKE_AMOUNT + STAKE_ACCOUNT_RENT_EXEMPTION).unwrap(),
         )
         .await;
     assert!(error.is_none(), "{:?}", error);
