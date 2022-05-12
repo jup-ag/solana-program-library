@@ -53,6 +53,7 @@ use {
         MINIMUM_ACTIVE_STAKE,
     },
     std::cmp::Ordering,
+    std::convert::TryFrom,
     std::str::FromStr,
     std::{process::exit, sync::Arc},
 };
@@ -3441,33 +3442,158 @@ fn command_withdraw_liquidity_sol(
 fn command_distribute_stake(
     config: &Config,
     stake_pool_address: &Pubkey,
-    only_from_reserve: bool,
 ) -> CommandResult {
-    if !config.no_update {
-        command_update(config, stake_pool_address, false, false)?;
-    }
-
+                                // TODO ВРЕМЯ ТОЛЬКО КОНЕЦ ЭПОХИ
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
 
     let epoch = config.rpc_client.get_epoch_info()?.epoch;
 
     let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
-    let validators_quantity = validator_list.validators.len();
-    if validators_quantity == 0 {
+    let contract_validators_quantity = validator_list.validators.len();
+
+    let response = reqwest::blocking::get(ValidatorsInfo::url_get_current_validators())?;
+    let validators_api_response = serde_json::from_slice::<'_, ValidatorsApiResponse>(&response.bytes()?[..])?;
+    let backend_validators_quantity = validators_api_response.data.len();
+
+    if contract_validators_quantity == 0 && backend_validators_quantity == 0 {
+        println!("There are no validators.");
+
         return Ok(());
+    }
+    if contract_validators_quantity != backend_validators_quantity {
+        return Err(
+            format!(
+                "Desynchronized state. The number of validators does not match. There are {} validators in contract and {} validators in backend",
+                contract_validators_quantity,
+                backend_validators_quantity
+            ).into()
+        );
+    }
+    '_a: for validator_stake_info in validator_list.validators.iter() {
+        let mut is_exist = false;
+        'b: for validators_data in validators_api_response.data.iter() {
+            if &validator_stake_info.vote_account_address.to_bytes()[..] == validators_data.vote_pk.as_bytes() {
+                is_exist = true;
+
+                break 'b;
+            }
+        }
+        if !is_exist {
+            return Err(
+                format!(
+                    "Desynchronized state. {} validator is not present in the backend.",
+                    validator_stake_info.vote_account_address
+                ).into()
+            );
+        }
+
+        if validator_stake_info.last_update_epoch == !epoch
+        {
+            return Err(
+                format!(
+                    "{} validator is not updated.",
+                    validator_stake_info.vote_account_address
+                ).into()
+            );
+        }
     }
 
     let stake_rent = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
-    if let None = config
+
+    let active_lamports = config
         .rpc_client
         .get_balance(&stake_pool.reserve_stake)?
-        .saturating_sub(stake_rent)
-        .checked_sub(stake_pool.total_lamports_liquidity)
-    {
-        return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
+        .saturating_sub(stake_rent);
+    if active_lamports > stake_pool.total_lamports_liquidity {
+        let mut total_lamports_for_distribution = active_lamports - stake_pool.total_lamports_liquidity;
+
+        let mut total_score: u128 = 0;
+        for validators_data in validators_api_response.data.iter() {
+            total_score = total_score + u128::try_from(validators_data.score)?;
+        }
+
+        '_c: for validators_data in validators_api_response.data.iter() {
+            let validator_total_lamports_should_be_distributed = u64::try_from(
+                (stake_pool.total_lamports as u128)
+                    .checked_mul(u128::try_from(validators_data.score)?)
+                    .ok_or("Calculation error")?
+                    .checked_div(total_score)
+                    .ok_or("Calculation error")?,
+            )?;
+
+            '_d: for validator_stake_info in validator_list.validators.iter() {
+                if &validator_stake_info.vote_account_address.to_bytes()[..] == validators_data.vote_pk.as_bytes() {
+                    let lamports_needed_to_distribute = validator_total_lamports_should_be_distributed
+                        - validator_stake_info.active_stake_lamports
+                        - validator_stake_info.transient_stake_lamports;                                // TODO ЧТО если ЭТО снятие трансзита , а не депозит транзита
+
+                    if lamports_needed_to_distribute > 0 {
+                        if validator_stake_info.transient_stake_lamports == 0 {
+                            if total_lamports_for_distribution >= lamports_needed_to_distribute {
+                                if total_lamports_for_distribution - lamports_needed_to_distribute < MINIMUM_ACTIVE_STAKE {
+                                    increase_validator_stake(
+                                        config,
+                                        stake_pool_address,
+                                        &validator_stake_info.vote_account_address,
+                                        total_lamports_for_distribution,
+                                    )?;
+
+                                    return Ok(());
+                                } else {                            // lamports_needed_to_distribute на миниимум Эмоунт
+                                    increase_validator_stake(
+                                        config,
+                                        stake_pool_address,
+                                        &validator_stake_info.vote_account_address,
+                                        lamports_needed_to_distribute,
+                                    )?;
+        
+                                    total_lamports_for_distribution = total_lamports_for_distribution - lamports_needed_to_distribute;
+                                }
+                            } else {
+                                if total_lamports_for_distribution < MINIMUM_ACTIVE_STAKE {
+                                    println!("Not enough lamports for distribution.");
+                        
+                                    return Ok(());
+                                } else {
+                                    increase_validator_stake(
+                                        config,
+                                        stake_pool_address,
+                                        &validator_stake_info.vote_account_address,
+                                        total_lamports_for_distribution,
+                                    )?;
+
+                                    return Ok(());
+                                }
+                            }
+                        } else {
+
+                            
+                        }
+                    }
+                }
+            }
+        }
+
+
+    } else {
+        if active_lamports == 0 {
+            return Ok(());
+        } else {
+
+
+
+            // TODO ВОсстановление ликвидносьи  // TODO Ликвидность восполнять
+            return Err("The number of Sol on the stake pool's reserve account is less than the number of liquidity Sol".into());
+        }
     }
+
+
+
+
+
+
 
     // TODO DELEYE
     println!(
@@ -4985,13 +5111,6 @@ fn main() {
                     .required(true)
                     .help("Stake pool address."),
             )
-            .arg(
-                Arg::with_name("only-from-reserve")
-                    .long("only-from-reserve")
-                    .takes_value(false)
-                    .help("Distribution of funds stored on the stake pool`s reserve account only"),
-
-            )
         )
         .subcommand(SubCommand::with_name("change-validators")
             .about("Take necessary validators and change stake pool`s validator list")
@@ -5645,9 +5764,8 @@ fn main() {
         }
         ("distribute-stake", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            let only_from_reserve = arg_matches.is_present("only-from-reserve");
 
-            command_distribute_stake(&config, &stake_pool_address, only_from_reserve)
+            command_distribute_stake(&config, &stake_pool_address)
         }
         ("withdraw-stake-for-subsequent-removing-validator", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
