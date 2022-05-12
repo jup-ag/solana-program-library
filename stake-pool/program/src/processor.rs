@@ -551,6 +551,9 @@ impl Processor {
         invoke(&ix, &[source, destination, system_program])
     }
 
+    /// Сreates and initializes the StakePool structure. 
+    /// The rate of exchange is initially None, which means that the exchange goes like 1:1.
+    /// 
     /// Processes `Initialize` instruction.
     #[allow(clippy::too_many_arguments)]
     #[inline(never)] // needed due to stack size violation
@@ -809,6 +812,9 @@ impl Processor {
             .map_err(|e| e.into())
     }
 
+    /// Adds a validator to the StakePool, storing the validator data in a ValidatorList
+    /// Сan only be performed by the StakePool staker.
+    /// 
     /// Processes `AddValidatorToPool` instruction.
     #[inline(never)] // needed due to stack size violation
     fn process_add_validator_to_pool(
@@ -942,6 +948,10 @@ impl Processor {
         Ok(())
     }
 
+    /// Removes a validator from the StakePOool by removing it from the ValidatorList
+    /// Before deleting a validator, it must have the required minimum funds but no more.
+    /// Сan only be performed by the StakePool staker.
+    /// 
     /// Processes `RemoveValidatorFromPool` instruction.
     #[inline(never)] // needed due to stack size violation
     fn process_remove_validator_from_pool(
@@ -1100,6 +1110,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Removes the stake from the validator stake account and forwards it to the StakePool reserve stake account
+    /// Сan only be performed by the StakePool staker.
+    /// 
     /// Processes `DecreaseValidatorStake` instruction.
     #[inline(never)] // needed due to stack size violation
     fn process_decrease_validator_stake(
@@ -1253,6 +1266,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Adds a stake to the validator stake account from StakePool reserve stake account
+    /// Сan only be performed by the StakePool staker.
+    /// 
     /// Processes `IncreaseValidatorStake` instruction.
     #[inline(never)] // needed due to stack size violation
     fn process_increase_validator_stake(
@@ -1423,6 +1439,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Sets the preferred validator. This validator can be used for stake deposits and stake withdrawals
+    /// Сan only be performed by the StakePool staker.
+    /// 
     /// Process `SetPreferredValidator` instruction
     #[inline(never)] // needed due to stack size violation
     fn process_set_preferred_validator(
@@ -1486,6 +1505,11 @@ impl Processor {
         Ok(())
     }
 
+    /// Updates information about the validators stored in the ValidatorList. 
+    /// Information, as a rule, changes at the moment of the onset of a new epoch. 
+    /// Preferably, use this method 1 time from the very beginning of a new epoch.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes `UpdateValidatorListBalance` instruction.
     #[inline(always)] // needed to maximize number of validators
     fn process_update_validator_list_balance(
@@ -1737,6 +1761,11 @@ impl Processor {
         Ok(())
     }
 
+    /// Updates the information stored in the StakePool structure.
+    /// You must use this method at the beginning of each epoch after updating the information about the validators stored in the ValidatorList. 
+    /// If you do not update information about the StakePool, then many APIs will not work.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes `UpdateStakePoolBalance` instruction.
     #[inline(always)] // needed to optimize number of validators
     fn process_update_stake_pool_balance(
@@ -1885,6 +1914,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Removes validators from the ValidatorList that were candidates for removal.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes the `CleanupRemovedValidatorEntries` instruction
     #[inline(never)] // needed to avoid stack size violation
     fn process_cleanup_removed_validator_entries(
@@ -1918,6 +1950,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Makes a deposit of a user stake in the StakePull validator, giving back
+    /// the number of tokens calculated according to a specific strategy.
+    /// 
     /// Processes [DepositStake](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_deposit_stake(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
@@ -2186,6 +2221,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Makes a deposit of a user sol in the StakePull reserve stake account, giving back 
+    /// the number of tokens calculated according to a specific strategy.
+    /// 
     /// Processes [DepositSol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_deposit_sol(
@@ -2329,6 +2367,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Moves the stake from the validator to user stake account and 
+    /// burns the tokens according to a specific strategy.
+    /// 
     /// Processes [WithdrawStake](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_withdraw_stake(
@@ -2563,6 +2604,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Moves the sol from StakePool reserve stake account to user wallet and 
+    /// burns the tokens according to a specific strategy.
+    /// 
     /// Processes [WithdrawSol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_withdraw_sol(
@@ -2693,6 +2737,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Changes the StakePool manager.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [SetManager](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_set_manager(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
@@ -2728,6 +2775,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Changes the StakePool fee of different kind.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [SetFee](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_set_fee(
@@ -2757,6 +2807,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Changes the StakePool staker.
+    /// Сan only be performed by the StakePool manager or staker.
+    /// 
     /// Processes [SetStaker](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_set_staker(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
@@ -2781,6 +2834,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Changes the StakePool funding authority.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [SetFundingAuthority](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_set_funding_authority(
@@ -2815,6 +2871,11 @@ impl Processor {
         Ok(())
     }
 
+    /// Makes a deposit of sols that will provide liquidity to the pool for "instant unstake" 
+    /// (withdrawal from reserve stake account). Sols for liquidity do not participate in the 
+    /// formation of rate of exchange and similar mechanisms. 
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [DepositLiquiditySol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_deposit_liquidity_sol(
@@ -2873,6 +2934,9 @@ impl Processor {
         Ok(())
     }
     
+    /// Moves sols for liquidity from reserve stake account to manager wallet.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [WithdrawLiquiditySol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_withdraw_liquidity_sol(
@@ -2946,6 +3010,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Creates account for storing CommunityToken structure.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [CreateCommunityToken](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_community_token(
@@ -3024,6 +3091,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Creates account for stoting CommunityTokenCounter structure.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [CreateCommunityTokensCounter](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_community_tokens_counter(
@@ -3098,6 +3168,8 @@ impl Processor {
         Ok(())
     }
 
+    /// Creates account for storing DaoState structure.
+    /// Сan only be performed by the StakePool manager.
     /// Processes [CreateDaoState](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_dao_state(
@@ -3166,6 +3238,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Creates account for storing CommunityTokenStakingRewards structure.
+    /// Account required for dao strategy.
+    /// 
     /// Processes [CreateCommunityTokenStakingRewards](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_community_token_staking_rewards(
@@ -3255,6 +3330,10 @@ impl Processor {
         Ok(())
     }
 
+    /// Makes a deposit of a user sol in the StakePull reserve stake account, giving back 
+    /// the number of tokens calculated according to a specific strategy. 
+    /// Сhecks that there is an account required for dao strategy and changes the data on this account.
+    /// 
     /// Processes [DaoStrategyDepositSol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_dao_strategy_deposit_sol(
@@ -3437,6 +3516,10 @@ impl Processor {
         Ok(())
     }
 
+    /// Moves the sol from StakePool reserve stake account to user wallet and 
+    /// burns the tokens according to a specific strategy.
+    /// Сhecks that there is an account required for dao strategy and changes the data on this account.
+    /// 
     /// Processes [WithdrawSol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_dao_strategy_withdraw_sol(
@@ -3606,6 +3689,10 @@ impl Processor {
         Ok(())
     }
 
+    /// Moves the stake from the validator to user stake account and 
+    /// burns the tokens according to a specific strategy.
+    /// Сhecks that there is an account required for dao strategy and changes the data on this account.
+    /// 
     /// Processes [DaoStrategyWithdrawStake](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_dao_strategy_withdraw_stake(
@@ -3878,6 +3965,10 @@ impl Processor {
         Ok(())
     }
 
+    /// Makes a deposit of a user stake in the StakePull validator, giving back
+    /// the number of tokens calculated according to a specific strategy.
+    /// Сhecks that there is an account required for dao strategy and changes the data on this account.
+    /// 
     /// Processes [DaoStrategyDepositStake](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_dao_strategy_deposit_stake(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
@@ -4184,6 +4275,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Create account for storing CommunityTokenStakingRewards structure.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [CreateCommunityTokenStakingRewardsCounter](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_community_token_staking_rewards_counter(
@@ -4256,6 +4350,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Mints Community tokens to user token account.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [MintCommunityToken](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_mint_community_token(
@@ -4364,6 +4461,9 @@ impl Processor {
         Ok(())
     }
 
+    /// Deletes account for storing CommunityTokenStakingRewards structure from network.
+    /// Сan only be performed by the StakePool manager.
+    /// 
     /// Processes [DeleteCommunityTokenStakingRewards](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_delete_community_token_staking_rewards(
@@ -4418,6 +4518,8 @@ impl Processor {
         Ok(())
     }
 
+    /// Router-processor for methods.
+    /// 
     /// Processes [Instruction](enum.Instruction.html).
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = StakePoolInstruction::try_from_slice(input)?;

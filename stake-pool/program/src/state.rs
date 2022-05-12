@@ -908,7 +908,7 @@ pub trait SimplePda {
     fn get_seed_prefix() -> &'static [u8];
 }
 
-/// Initialized DAO`s Community token`s mint detail
+/// Stores Ccmmunity token mint.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct CommunityToken {
@@ -925,7 +925,7 @@ impl SimplePda for CommunityToken {
     }
 }
 
-/// Initialized DAO state
+/// Stores a state indicating the presence of a DAO in the pool. if DAO is enabled, then Community token mint should exist.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct DaoState {
@@ -951,7 +951,7 @@ pub enum NetworkAccountType {
     CommunityTokenStakingRewards
 }
 
-/// Counter of community tokens
+/// Stores the number of minted tokens for each category.
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct CommunityTokensCounter {
@@ -1034,7 +1034,7 @@ impl SimplePda for CommunityTokensCounter {
     }
 }
 
-/// Initialized information for payment the reward`s in DAO tokens
+/// Stores information that can be used to mint Community tokens according to a distribution strategy.
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct CommunityTokenStakingRewards {
@@ -1121,7 +1121,8 @@ impl CommunityTokenStakingRewards {
     }
 }
 
-/// Initialized information for requesting CommunityTokenStakingRewards accounts from network
+/// Stores information that allows to request accounts for storing CommunityTokenStakingRewards 
+/// structure from the network in parts.
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub struct CommunityTokenStakingRewardsCounter {
