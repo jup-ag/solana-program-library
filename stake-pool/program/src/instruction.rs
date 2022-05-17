@@ -527,23 +527,23 @@ pub enum StakePoolInstruction {
     ///
     ///   0. `[w]` Stake pool
     ///   1. `[w]` Validator stake list storage account
-    ///   2. `[s]/[]` Stake pool deposit authority
-    ///   3. `[]` Stake pool withdraw authority
-    ///   4. `[w]` Stake account to join the pool (withdraw authority for the stake account should be first set to the stake pool deposit authority)
-    ///   5. `[w]` Validator stake account for the stake account to be merged with
-    ///   6. `[w]` Reserve stake account, to withdraw rent exempt reserve
-    ///   7. `[w]` User account to receive pool tokens
-    ///   8. `[w]` Account to receive pool fee tokens
-    ///   9. `[w]` Account to receive a portion of pool fee tokens as referral fees
-    ///  10. `[w]` Pool token mint account
-    ///  11. '[]' Sysvar clock account
-    ///  12. '[]' Sysvar stake history account
-    ///  13. `[]` Pool token program id,
-    ///  14. `[]` Stake program id,
-    ///  15. `[]` User account to hold DAO`s community tokens
-    ///  16. `[w]` Account for storing community token staking rewards dto
-    ///  17. `[s]` Owner wallet
-    ///  18. `[]` Account for storing community token dto
+    ///   2. `[]` Stake pool withdraw authority
+    ///   3. `[w]` Stake account to join the pool (withdraw authority for the stake account should be first set to the stake pool deposit authority)
+    ///   4. `[w]` Destination stake account for the stake account to be merged with. It can be Validator stake account or Reserve stake account.
+    ///   5. `[w]` Reserve stake account, to withdraw rent exempt reserve
+    ///   6. `[w]` User account to receive pool tokens
+    ///   7. `[w]` Account to receive pool fee tokens
+    ///   8. `[w]` Account to receive a portion of pool fee tokens as referral fees
+    ///  9. `[w]` Pool token mint account
+    ///  10. '[]' Sysvar clock account
+    ///  11. '[]' Sysvar stake history account
+    ///  12. `[]` Pool token program id,
+    ///  13. `[]` Stake program id,
+    ///  14. `[]` User account to hold DAO`s community tokens
+    ///  15. `[w]` Account for storing community token staking rewards dto
+    ///  16. `[s]` Owner wallet
+    ///  17. `[]` Account for storing community token dto
+    ///  18. `[s]` (Optional) Stake pool deposit authority
     DaoStrategyDepositStake,
 
     ///   Create account for storing counter for community token staking rewards accounts
@@ -603,6 +603,17 @@ pub enum StakePoolInstruction {
     ///   5  '[]' User account for storing pool tokens
     ///   6. `[]` System program account
     DeleteCommunityTokenStakingRewards,
+
+    ///   Merge inactive stake accounts with the pool's reserve account
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[]` Stake pool withdraw authority
+    ///   3. `[w]` Pool's inactive stake account
+    ///   4. `[w]` Reserve stake account
+    ///   5. '[]' Sysvar clock account
+    ///   6. '[]' Sysvar stake history account
+    ///   7. `[]` Stake program id,
+    MergeInactiveStake,
 }
 
 /// Creates an 'initialize' instruction.
@@ -1987,7 +1998,7 @@ pub fn dao_strategy_deposit_stake(
     stake_pool_withdraw_authority: &Pubkey,
     deposit_stake_address: &Pubkey,
     deposit_stake_withdraw_authority: &Pubkey,
-    validator_stake_account: &Pubkey,
+    dest_stake_account: &Pubkey,
     reserve_stake_account: &Pubkey,
     pool_tokens_to: &Pubkey,
     manager_fee_account: &Pubkey,
@@ -2004,10 +2015,9 @@ pub fn dao_strategy_deposit_stake(
     let accounts = vec![
         AccountMeta::new(*stake_pool, false),
         AccountMeta::new(*validator_list_storage, false),
-        AccountMeta::new_readonly(stake_pool_deposit_authority, false),
         AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
         AccountMeta::new(*deposit_stake_address, false),
-        AccountMeta::new(*validator_stake_account, false),
+        AccountMeta::new(*dest_stake_account, false),
         AccountMeta::new(*reserve_stake_account, false),
         AccountMeta::new(*pool_tokens_to, false),
         AccountMeta::new(*manager_fee_account, false),
@@ -2021,6 +2031,7 @@ pub fn dao_strategy_deposit_stake(
         AccountMeta::new(*community_token_staking_rewards_dto, false),
         AccountMeta::new_readonly(*owner_wallet, true),
         AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+        AccountMeta::new_readonly(stake_pool_deposit_authority, false),
     ];
     vec![
         stake::instruction::authorize(
@@ -2052,11 +2063,10 @@ pub fn dao_strategy_deposit_stake_with_authority(
     program_id: &Pubkey,
     stake_pool: &Pubkey,
     validator_list_storage: &Pubkey,
-    stake_pool_deposit_authority: &Pubkey,
     stake_pool_withdraw_authority: &Pubkey,
     deposit_stake_address: &Pubkey,
     deposit_stake_withdraw_authority: &Pubkey,
-    validator_stake_account: &Pubkey,
+    dest_stake_account: &Pubkey,
     reserve_stake_account: &Pubkey,
     pool_tokens_to: &Pubkey,
     manager_fee_account: &Pubkey,
@@ -2067,14 +2077,14 @@ pub fn dao_strategy_deposit_stake_with_authority(
     community_token_staking_rewards_dto: &Pubkey,
     owner_wallet: &Pubkey,
     community_token_dto_pubkey: &Pubkey,
+    stake_pool_deposit_authority: &Pubkey,
 ) -> Vec<Instruction> {
     let accounts = vec![
         AccountMeta::new(*stake_pool, false),
         AccountMeta::new(*validator_list_storage, false),
-        AccountMeta::new_readonly(*stake_pool_deposit_authority, true),
         AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
         AccountMeta::new(*deposit_stake_address, false),
-        AccountMeta::new(*validator_stake_account, false),
+        AccountMeta::new(*dest_stake_account, false),
         AccountMeta::new(*reserve_stake_account, false),
         AccountMeta::new(*pool_tokens_to, false),
         AccountMeta::new(*manager_fee_account, false),
@@ -2088,6 +2098,7 @@ pub fn dao_strategy_deposit_stake_with_authority(
         AccountMeta::new(*community_token_staking_rewards_dto, false),
         AccountMeta::new_readonly(*owner_wallet, true),
         AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+        AccountMeta::new_readonly(*stake_pool_deposit_authority, true),
     ];
     vec![
         stake::instruction::authorize(
@@ -2204,6 +2215,35 @@ pub fn delete_community_token_staking_rewards(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::DeleteCommunityTokenStakingRewards
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instruction for merge of inactive pool's stake with the pool's reserve stake
+pub fn merge_inactive_stake(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    stake: &Pubkey,
+    reserve_stake_account: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*stake, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
+        AccountMeta::new_readonly(sysvar::stake_history::id(), false),
+        AccountMeta::new_readonly(stake::program::id(), false),
+    ]; 
+    
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::MergeInactiveStake
             .try_to_vec()
             .unwrap(),
     }

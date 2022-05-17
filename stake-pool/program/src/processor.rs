@@ -1787,6 +1787,7 @@ impl Processor {
 
         check_account_owner(stake_pool_info, program_id)?;
         let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
@@ -1804,8 +1805,8 @@ impl Processor {
         if stake_pool.token_program_id != *token_program_info.key {
             return Err(ProgramError::IncorrectProgramId);
         }
-
         check_account_owner(validator_list_info, program_id)?;
+
         let mut validator_list_data = validator_list_info.data.borrow_mut();
         let (header, validator_list) =
             ValidatorListHeader::deserialize_vec(&mut validator_list_data)?;
@@ -3975,10 +3976,9 @@ impl Processor {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let validator_list_info = next_account_info(account_info_iter)?;
-        let stake_deposit_authority_info = next_account_info(account_info_iter)?;
         let withdraw_authority_info = next_account_info(account_info_iter)?;
         let stake_info = next_account_info(account_info_iter)?;
-        let validator_stake_account_info = next_account_info(account_info_iter)?;
+        let dest_stake_account_info = next_account_info(account_info_iter)?;
         let reserve_stake_account_info = next_account_info(account_info_iter)?;
         let dest_user_pool_info = next_account_info(account_info_iter)?;
         let manager_fee_info = next_account_info(account_info_iter)?;
@@ -3993,15 +3993,17 @@ impl Processor {
         let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
         let owner_wallet_info = next_account_info(account_info_iter)?;
         let community_token_dto_info = next_account_info(account_info_iter)?;
+        let stake_deposit_authority_info = next_account_info(account_info_iter)?;
+
+        let mut is_just_deactivation = false;
 
         check_stake_program(stake_program_info.key)?;
-
         check_account_owner(stake_pool_info, program_id)?;
+
         let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
-
         if stake_pool.last_update_epoch < clock.epoch {
             return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
         }
@@ -4028,27 +4030,6 @@ impl Processor {
         if !header.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
-
-        let (_, validator_stake) = get_stake_state(validator_stake_account_info)?;
-        let pre_all_validator_lamports = validator_stake_account_info.lamports();
-        let vote_account_address = validator_stake.delegation.voter_pubkey;
-        check_validator_stake_address(
-            program_id,
-            stake_pool_info.key,
-            validator_stake_account_info.key,
-            &vote_account_address,
-        )?;
-        if let Some(preferred_deposit) = stake_pool.preferred_deposit_validator_vote_address {
-            if preferred_deposit != vote_account_address {
-                msg!(
-                    "Incorrect deposit address, expected {}, received {}",
-                    preferred_deposit,
-                    vote_account_address
-                );
-                return Err(StakePoolError::IncorrectDepositVoteAddress.into());
-            }
-        }
-
         if !owner_wallet_info.is_signer {
             return Err(StakePoolError::SignatureMissing.into());
         }
@@ -4083,19 +4064,74 @@ impl Processor {
         community_token_staking_rewards.set_last_rewarded_epoch(clock.epoch);
         community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
-        let mut validator_stake_info = validator_list
-            .find_mut::<ValidatorStakeInfo>(
-                vote_account_address.as_ref(),
-                ValidatorStakeInfo::memcmp_pubkey,
-            )
-            .ok_or(StakePoolError::ValidatorNotFound)?;
+        let pre_all_validator_lamports = dest_stake_account_info.lamports();
+        let mut pre_stake = pre_all_validator_lamports;
 
-        if validator_stake_info.status != StakeStatus::Active {
-            msg!("Validator is marked for removal and no longer accepting deposits");
-            return Err(StakePoolError::ValidatorNotFound.into());
-        }
+        let stake_state = try_from_slice_unchecked::<stake::state::StakeState>(&stake_info.data.borrow())?;
 
-        msg!("Stake pre merge {}", validator_stake.delegation.stake);
+        match stake_state {
+            stake::state::StakeState::Stake(_, stake) if stake.delegation.deactivation_epoch == Epoch::MAX => {
+                let stake_vote_account_address = stake.delegation.voter_pubkey;
+                let validator_stake_info = validator_list
+                    .find_mut::<ValidatorStakeInfo>(
+                        stake_vote_account_address.as_ref(),
+                        ValidatorStakeInfo::memcmp_pubkey,
+                    ); 
+
+                if validator_stake_info.is_none() {
+                    // the stake account is active and delegated to a foreign validator,
+                    // so deactivate it and merge during update to the pool's reserve account
+                    is_just_deactivation = true;
+                } else {
+                    // the stake account is active and delegated to one of the pool's validator
+                    // so merge it to the validator's stake aacount
+                    let (_, dest_stake) = get_stake_state(dest_stake_account_info)?;
+                    let validator_vote_account_address = dest_stake.delegation.voter_pubkey;
+
+                    if validator_vote_account_address != stake_vote_account_address {
+                        return Err(StakePoolError::IncorrectDepositVoteAddress.into())
+                    }
+                    check_validator_stake_address(
+                        program_id,
+                        stake_pool_info.key,
+                        dest_stake_account_info.key,
+                        &validator_vote_account_address,
+                    )?;
+                    if let Some(preferred_deposit) = stake_pool.preferred_deposit_validator_vote_address {
+                        if preferred_deposit != validator_vote_account_address {
+                            msg!(
+                                "Incorrect deposit address, expected {}, received {}",
+                                preferred_deposit,
+                                validator_vote_account_address
+                            );
+                            return Err(StakePoolError::IncorrectDepositVoteAddress.into());
+                        }
+                    }
+                    let validator_stake_info = validator_list
+                        .find_mut::<ValidatorStakeInfo>(
+                            validator_vote_account_address.as_ref(),
+                            ValidatorStakeInfo::memcmp_pubkey,
+                        )
+                        .ok_or(StakePoolError::ValidatorNotFound)?;
+        
+                    if validator_stake_info.status != StakeStatus::Active {
+                        msg!("Validator is marked for removal and no longer accepting deposits");
+                        return Err(StakePoolError::ValidatorNotFound.into());
+                    }
+                    msg!("Stake pre merge {}", dest_stake.delegation.stake);
+                    pre_stake = dest_stake.delegation.stake;
+                }
+            }
+            stake::state::StakeState::Initialized(_)
+            | stake::state::StakeState::Stake(_, _) => {
+                // the stake account is deactivated, so merge it with the pool's reserve account
+                if dest_stake_account_info.key != reserve_stake_account_info.key {
+                    return Err(StakePoolError::InvalidStakeAccountAddress.into());
+                }
+            },
+            stake::state::StakeState::Uninitialized
+            | stake::state::StakeState::RewardsPool => return Err(StakePoolError::WrongStakeState.into()),
+        };
 
         let (stake_deposit_authority_program_address, deposit_bump_seed) =
             find_deposit_authority_program_address(program_id, stake_pool_info.key);
@@ -4118,23 +4154,44 @@ impl Processor {
                 clock_info.clone(),
                 stake_program_info.clone(),
             )?;
+        }        
+
+        if is_just_deactivation {
+            Self::stake_deactivate(
+                stake_info.clone(),
+                clock_info.clone(),
+                withdraw_authority_info.clone(),
+                stake_pool_info.key,
+                AUTHORITY_WITHDRAW,
+                stake_pool.stake_withdraw_bump_seed,
+            )?;            
+        } else {
+            Self::stake_merge(
+                stake_pool_info.key,
+                stake_info.clone(),
+                withdraw_authority_info.clone(),
+                AUTHORITY_WITHDRAW,
+                stake_pool.stake_withdraw_bump_seed,
+                dest_stake_account_info.clone(),
+                clock_info.clone(),
+                stake_history_info.clone(),
+                stake_program_info.clone(),
+            )?;
+        }
+        let mut post_all_validator_lamports = dest_stake_account_info.lamports();
+
+        if is_just_deactivation {
+            post_all_validator_lamports = post_all_validator_lamports
+                .checked_add(stake_info.lamports())
+                .ok_or(StakePoolError::CalculationFailure)?;
         }
 
-        Self::stake_merge(
-            stake_pool_info.key,
-            stake_info.clone(),
-            withdraw_authority_info.clone(),
-            AUTHORITY_WITHDRAW,
-            stake_pool.stake_withdraw_bump_seed,
-            validator_stake_account_info.clone(),
-            clock_info.clone(),
-            stake_history_info.clone(),
-            stake_program_info.clone(),
-        )?;
-
-        let (_, post_validator_stake) = get_stake_state(validator_stake_account_info)?;
-        let post_all_validator_lamports = validator_stake_account_info.lamports();
-        msg!("Stake post merge {}", post_validator_stake.delegation.stake);
+        let mut post_stake = post_all_validator_lamports;
+        if dest_stake_account_info.key != reserve_stake_account_info.key {
+            let (_, post_validator_stake) = get_stake_state(dest_stake_account_info)?;
+            msg!("Stake post merge {}", post_validator_stake.delegation.stake);
+            post_stake = post_validator_stake.delegation.stake;
+        }
 
         let total_deposit_lamports = post_all_validator_lamports
             .checked_sub(pre_all_validator_lamports)
@@ -4144,10 +4201,8 @@ impl Processor {
             return Err(StakePoolError::DepositTooSmall.into());
         }
 
-        let stake_deposit_lamports = post_validator_stake
-            .delegation
-            .stake
-            .checked_sub(validator_stake.delegation.stake)
+        let stake_deposit_lamports = post_stake
+            .checked_sub(pre_stake)
             .ok_or(StakePoolError::CalculationFailure)?;
         let sol_deposit_lamports = total_deposit_lamports
             .checked_sub(stake_deposit_lamports)
@@ -4239,10 +4294,12 @@ impl Processor {
         }
 
         // withdraw additional lamports to the reserve
-        if sol_deposit_lamports > 0 {
+        // if we don't merge our stake to the reserve
+        if sol_deposit_lamports > 0 
+            && dest_stake_account_info.key != reserve_stake_account_info.key {
             Self::stake_withdraw(
                 stake_pool_info.key,
-                validator_stake_account_info.clone(),
+                dest_stake_account_info.clone(),
                 withdraw_authority_info.clone(),
                 AUTHORITY_WITHDRAW,
                 stake_pool.stake_withdraw_bump_seed,
@@ -4266,11 +4323,19 @@ impl Processor {
             .ok_or(StakePoolError::CalculationFailure)?;
         stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
 
-        validator_stake_info.active_stake_lamports = post_validator_stake
-            .delegation
-            .stake
-            .checked_sub(MINIMUM_ACTIVE_STAKE)
-            .ok_or(StakePoolError::CalculationFailure)?;
+        if dest_stake_account_info.key != reserve_stake_account_info.key {
+            let (_, dest_stake) = get_stake_state(dest_stake_account_info)?;
+            let vote_account_address = dest_stake.delegation.voter_pubkey;
+            let mut validator_stake_info = validator_list
+            .find_mut::<ValidatorStakeInfo>(
+                vote_account_address.as_ref(),
+                ValidatorStakeInfo::memcmp_pubkey,
+            )
+            .ok_or(StakePoolError::ValidatorNotFound)?;
+            validator_stake_info.active_stake_lamports = post_stake
+                .checked_sub(MINIMUM_ACTIVE_STAKE)
+                .ok_or(StakePoolError::CalculationFailure)?;
+        }
 
         Ok(())
     }
@@ -4518,6 +4583,55 @@ impl Processor {
         Ok(())
     }
 
+    /// Merge pool's inactive stake account with the pool's reserve stake account
+    /// 
+    /// Processes [MergeInactiveStake](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_merge_inactive_stake(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let stake_info = next_account_info(account_info_iter)?;
+        let reserve_stake_account_info = next_account_info(account_info_iter)?;
+
+        let clock_info = next_account_info(account_info_iter)?;
+        let stake_history_info = next_account_info(account_info_iter)?;
+        let stake_program_info = next_account_info(account_info_iter)?;
+
+        check_stake_program(stake_program_info.key)?;
+        check_account_owner(stake_pool_info, program_id)?;
+
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        stake_pool.check_manager(manager_info)?;
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+
+        stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+
+        Self::stake_merge(
+            stake_pool_info.key,
+            stake_info.clone(),
+            withdraw_authority_info.clone(),
+            AUTHORITY_WITHDRAW,
+            stake_pool.stake_withdraw_bump_seed,
+            reserve_stake_account_info.clone(),
+            clock_info.clone(),
+            stake_history_info.clone(),
+            stake_program_info.clone(),
+        )?;
+
+        Ok(())
+    }
+
     /// Router-processor for methods.
     /// 
     /// Processes [Instruction](enum.Instruction.html).
@@ -4698,6 +4812,10 @@ impl Processor {
             StakePoolInstruction::DeleteCommunityTokenStakingRewards => {
                 msg!("Instruction: DeleteCommunityTokenStakingRewards");
                 Self::process_delete_community_token_staking_rewards(program_id, accounts)
+            }
+            StakePoolInstruction::MergeInactiveStake => {
+                msg!("Instruction: MergeInactiveStake");
+                Self::process_merge_inactive_stake(program_id, accounts)
             }
         }
     }

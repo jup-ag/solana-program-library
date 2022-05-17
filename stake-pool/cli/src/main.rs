@@ -30,6 +30,7 @@ use {
         program_pack::Pack,
         pubkey::Pubkey,
         stake,
+        clock::Epoch,
     },
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
     solana_sdk::{
@@ -1189,14 +1190,116 @@ fn command_deposit_stake(
     Ok(())
 }
 
+fn choose_dest_stake_account(
+    config: &Config,
+    stake_pool: &StakePool,
+    stake_pool_address: &Pubkey,
+    stake_key: &Pubkey,
+    stake_state: &stake::state::StakeState,
+    withdraw_authority_key: &Pubkey,
+    instructions: &mut Vec<Instruction>,
+) -> Result<Pubkey, Error> {
+    let epoch_info = config.rpc_client.get_epoch_info()?;
+    match stake_state {
+        stake::state::StakeState::Initialized(_) => {
+            if config.verbose {
+                println!("Stake account is Initialized, so it will be merged to the pools reserve account")
+            }
+            Ok(stake_pool.reserve_stake)
+        }
+        stake::state::StakeState::Stake(_, stake) if 
+            stake.delegation.deactivation_epoch == Epoch::MAX
+            && stake.delegation.activation_epoch == epoch_info.epoch => {
+                if config.verbose {
+                    println!("Stake account is Activating, so it will be be deactivated and merged to the pools reserve account")
+                }
+                instructions.push(
+                    stake::instruction::deactivate_stake(
+                        stake_key, 
+                        withdraw_authority_key,
+                    )
+                );
+                Ok(stake_pool.reserve_stake)
+        }
+        stake::state::StakeState::Stake(_, stake) if stake.delegation.deactivation_epoch == Epoch::MAX => { 
+            // Check if this vote account has staking account in the pool
+            let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+            if !validator_list.contains(&stake.delegation.voter_pubkey) {                
+                if config.verbose {
+                    println!("Stake account is active and belongs to a foreign validator, so it will be merged to the pools reserve account after deactivation");
+                }            
+                Ok(stake_pool.reserve_stake)
+            } else {
+                // Calculate validator stake account address linked to the pool
+                let (validator_stake_account, _) =
+                    find_stake_program_address(&spl_stake_pool::id(), &stake.delegation.voter_pubkey, stake_pool_address);
+
+                let validator_stake_state = get_stake_state(&config.rpc_client, &validator_stake_account)?;
+                println!(
+                    "Depositing stake {} into stake pool account {}",
+                    stake_key, validator_stake_account
+                );
+                if config.verbose {
+                    println!("{:?}", validator_stake_state);
+                }
+                Ok(validator_stake_account)
+            }
+        },
+        stake::state::StakeState::Stake(_, stake) if 
+            stake.delegation.deactivation_epoch == epoch_info.epoch => {
+                if config.verbose {
+                    println!("Stake account is Deactivating, so it will be activated and processed by the pool")
+                }
+                instructions.push(
+                    stake::instruction::delegate_stake(
+                        stake_key,
+                        withdraw_authority_key,
+                        &stake.delegation.voter_pubkey,
+                    )
+                );
+
+                // Check if this vote account has staking account in the pool
+                let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+                if !validator_list.contains(&stake.delegation.voter_pubkey) {                
+                    if config.verbose {
+                        println!("Stake account is active and belongs to a foreign validator, so it will be merged to the pools reserve account after deactivation");
+                    }            
+                    Ok(stake_pool.reserve_stake)
+                } else {
+                    // Calculate validator stake account address linked to the pool
+                    let (validator_stake_account, _) =
+                        find_stake_program_address(&spl_stake_pool::id(), &stake.delegation.voter_pubkey, stake_pool_address);
+
+                    let validator_stake_state = get_stake_state(&config.rpc_client, &validator_stake_account)?;
+                    println!(
+                        "Depositing stake {} into stake pool account {}",
+                        stake_key, validator_stake_account
+                    );
+                    if config.verbose {
+                        println!("{:?}", validator_stake_state);
+                    }
+                    Ok(validator_stake_account)
+                }                
+        }        
+        stake::state::StakeState::Stake(_, _) => {
+            if config.verbose {
+                println!("Stake account will be merged to the pools reserve account")
+            }
+            Ok(stake_pool.reserve_stake)
+        },
+        stake::state::StakeState::Uninitialized
+        | stake::state::StakeState::RewardsPool => Err("Wrong stake account state, must be delegated to validator".into()),
+    }
+}
+
 fn command_dao_strategy_deposit_stake(
     config: &Config,
     stake_pool_address: &Pubkey,
-    stake: &Pubkey,
+    stake_key: &Pubkey,
     withdraw_authority: Box<dyn Signer>,
     pool_token_receiver_account: &Option<Pubkey>,
     referrer_token_account: &Option<Pubkey>,
-) -> CommandResult {
+) -> CommandResult {    
     if !config.no_update {
         command_update(config, stake_pool_address, false, false)?;
     }
@@ -1222,39 +1325,25 @@ fn command_dao_strategy_deposit_stake(
     config.rpc_client
         .get_account(&community_token_staking_rewards_counter_dto_pubkey)?;
 
+    let mut instructions: Vec<Instruction> = vec![];
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-    let stake_state = get_stake_state(&config.rpc_client, stake)?;
+    let stake_state = get_stake_state(&config.rpc_client, stake_key)?;
 
     if config.verbose {
         println!("Depositing stake account {:?}", stake_state);
     }
-    let vote_account = match stake_state {
-        stake::state::StakeState::Stake(_, stake) => Ok(stake.delegation.voter_pubkey),
-        _ => Err("Wrong stake account state, must be delegated to validator"),
-    }?;
 
-    // Check if this vote account has staking account in the pool
-    let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
-    if !validator_list.contains(&vote_account) {
-        return Err("Stake account for this validator does not exist in the pool.".into());
-    }
-
-    // Calculate validator stake account address linked to the pool
-    let (validator_stake_account, _) =
-        find_stake_program_address(&spl_stake_pool::id(), &vote_account, stake_pool_address);
-
-    let validator_stake_state = get_stake_state(&config.rpc_client, &validator_stake_account)?;
-    println!(
-        "Depositing stake {} into stake pool account {}",
-        stake, validator_stake_account
-    );
-    if config.verbose {
-        println!("{:?}", validator_stake_state);
-    }
+    let dest_stake_account = choose_dest_stake_account(
+        config,
+        &stake_pool,
+        stake_pool_address,
+        stake_key,
+        &stake_state,
+        &withdraw_authority.pubkey(),
+        &mut instructions,
+    )?;
 
     let mut total_rent_free_balances: u64 = 0;
-
-    let mut instructions: Vec<Instruction> = vec![];
 
     let mut signers: Vec<&dyn Signer> = vec![];
 
@@ -1321,16 +1410,14 @@ fn command_dao_strategy_deposit_stake(
                 );
                 return Err(error.into());
             }
-
             spl_stake_pool::instruction::dao_strategy_deposit_stake_with_authority(
                 &spl_stake_pool::id(),
                 stake_pool_address,
                 &stake_pool.validator_list,
-                &stake_deposit_authority.pubkey(),
                 &pool_withdraw_authority,
-                stake,
+                stake_key,
                 &withdraw_authority.pubkey(),
-                &validator_stake_account,
+                &dest_stake_account,
                 &stake_pool.reserve_stake,
                 &pool_token_receiver_account,
                 &stake_pool.manager_fee_account,
@@ -1340,7 +1427,8 @@ fn command_dao_strategy_deposit_stake(
                 &dao_community_token_receiver_account,
                 &community_token_staking_rewards_dto_pubkey,
                 &config.token_owner.pubkey(),
-                &community_token_dto_pubkey
+                &community_token_dto_pubkey,
+                &stake_deposit_authority.pubkey(),
             )
         } else {
             spl_stake_pool::instruction::dao_strategy_deposit_stake(
@@ -1348,9 +1436,9 @@ fn command_dao_strategy_deposit_stake(
                 stake_pool_address,
                 &stake_pool.validator_list,
                 &pool_withdraw_authority,
-                stake,
+                stake_key,
                 &withdraw_authority.pubkey(),
-                &validator_stake_account,
+                &dest_stake_account,
                 &stake_pool.reserve_stake,
                 &pool_token_receiver_account,
                 &stake_pool.manager_fee_account,
@@ -1363,7 +1451,6 @@ fn command_dao_strategy_deposit_stake(
                 &community_token_dto_pubkey
             )
         };
-
     instructions.append(&mut deposit_instructions);
 
     let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
@@ -1379,6 +1466,7 @@ fn command_dao_strategy_deposit_stake(
     unique_signers!(signers);
     let transaction = Transaction::new(&signers, message, recent_blockhash);
     send_transaction(config, transaction)?;
+
     Ok(())
 }
 
@@ -1627,7 +1715,7 @@ fn command_dao_strategy_deposit_all_stake(
 
     let pool_withdraw_authority =
         find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+
     let mut signers = if let Some(stake_deposit_authority) = config.funding_authority.as_ref() {
         if stake_deposit_authority.pubkey() != stake_pool.stake_deposit_authority {
             let error = format!(
@@ -1651,38 +1739,28 @@ fn command_dao_strategy_deposit_all_stake(
 
     for stake_address in stake_addresses {
         let stake_state = get_stake_state(&config.rpc_client, &stake_address)?;
+        let mut instructions: Vec<solana_sdk::instruction::Instruction> = vec![];
 
-        let vote_account = match stake_state {
-            stake::state::StakeState::Stake(_, stake) => Ok(stake.delegation.voter_pubkey),
-            _ => Err("Wrong stake account state, must be delegated to validator"),
-        }?;
+        let dest_stake_account = choose_dest_stake_account(
+            config,
+            &stake_pool,
+            stake_pool_address,
+            &stake_address,
+            &stake_state,
+            &withdraw_authority.pubkey(),
+            &mut instructions,
+        )?;
 
-        if !validator_list.contains(&vote_account) {
-            return Err("Stake account for this validator does not exist in the pool.".into());
-        }
-
-        // Calculate validator stake account address linked to the pool
-        let (validator_stake_account, _) =
-            find_stake_program_address(&spl_stake_pool::id(), &vote_account, stake_pool_address);
-
-        let validator_stake_state = get_stake_state(&config.rpc_client, &validator_stake_account)?;
-        println!("Depositing user stake {}: {:?}", stake_address, stake_state);
-        println!(
-            "..into pool stake {}: {:?}",
-            validator_stake_account, validator_stake_state
-        );
-
-        let instructions = if let Some(stake_deposit_authority) = config.funding_authority.as_ref()
+        let mut deposit_instructions = if let Some(stake_deposit_authority) = config.funding_authority.as_ref()
         {
             spl_stake_pool::instruction::dao_strategy_deposit_stake_with_authority(
                 &spl_stake_pool::id(),
                 stake_pool_address,
                 &stake_pool.validator_list,
-                &stake_deposit_authority.pubkey(),
                 &pool_withdraw_authority,
                 &stake_address,
                 &withdraw_authority.pubkey(),
-                &validator_stake_account,
+                &dest_stake_account,
                 &stake_pool.reserve_stake,
                 &pool_token_receiver_account,
                 &stake_pool.manager_fee_account,
@@ -1692,7 +1770,8 @@ fn command_dao_strategy_deposit_all_stake(
                 &dao_community_token_receiver_account,
                 &community_token_staking_rewards_dto_pubkey,
                 &config.token_owner.pubkey(),
-                &community_token_dto_pubkey
+                &community_token_dto_pubkey,
+                &stake_deposit_authority.pubkey(),
             )
         } else {
             spl_stake_pool::instruction::dao_strategy_deposit_stake(
@@ -1702,7 +1781,7 @@ fn command_dao_strategy_deposit_all_stake(
                 &pool_withdraw_authority,
                 &stake_address,
                 &withdraw_authority.pubkey(),
-                &validator_stake_account,
+                &dest_stake_account,
                 &stake_pool.reserve_stake,
                 &pool_token_receiver_account,
                 &stake_pool.manager_fee_account,
@@ -1716,6 +1795,7 @@ fn command_dao_strategy_deposit_all_stake(
             )
         };
 
+        instructions.append(&mut deposit_instructions);
         let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
         let message = Message::new_with_blockhash(
             &instructions,
@@ -2154,6 +2234,57 @@ fn command_update(
             println!("Update not required");
             return Ok(());
         }
+    }
+
+    // Merge inactive stake accounts with the pool's reserve stake
+    let pool_withdraw_authority =
+        find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let stake_accounts = get_all_stake(&config.rpc_client, &pool_withdraw_authority)?;
+
+    for stake_key in &stake_accounts {
+        if *stake_key != stake_pool.reserve_stake {
+            let stake_state = get_stake_state(&config.rpc_client, stake_key)?;
+            match stake_state {
+                stake::state::StakeState::Uninitialized
+                | stake::state::StakeState::RewardsPool => {
+                    if config.verbose {
+                        println!("Stake account {} has a wrong state, so it can't be merged with the pools reserve account", stake_key)
+                    } 
+                    continue                   
+                }
+                stake::state::StakeState::Stake(_, stake) if 
+                    stake.delegation.deactivation_epoch >= epoch_info.epoch  => { 
+                    if config.verbose {
+                        println!("Stake account {} is active or in a transient state, no need to merge it with the pools reserve account", stake_key)
+                    }
+                    continue
+                },
+                stake::state::StakeState::Initialized(_)
+                | stake::state::StakeState::Stake(_,_) => {
+                    if config.verbose {
+                        println!("Stake account {} will be merged to the pools reserve account {}", stake_key, stake_pool.reserve_stake)
+                    }
+
+                    let merge_instruction = spl_stake_pool::instruction::merge_inactive_stake(
+                        &spl_stake_pool::id(),
+                        stake_pool_address,
+                        &config.manager.pubkey(),
+                        &pool_withdraw_authority,
+                        stake_key,
+                        &stake_pool.reserve_stake,
+                    );
+                    let transaction = checked_transaction_with_signers(
+                        config,
+                        &[merge_instruction],
+                        &[
+                            config.fee_payer.as_ref(),
+                            config.manager.as_ref()
+                        ],
+                    )?;
+                    send_transaction(config, transaction)?;
+                },
+            }
+        } 
     }
 
     let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
