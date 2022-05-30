@@ -407,7 +407,7 @@ struct ValidatorsInfo {
 
 impl ValidatorsInfo {
     fn url_get_current_validators() -> String {
-        format!("https://api.stakesolana.app/v1/pool-validators/EverSOL?sort=apy&desc=true&offset=0&limit={}",
+        format!("https://api.stakesolana.app/v1/pool-validators/Eversol?sort=apy&desc=true&offset=0&limit={}",
             VALIDATORS_QUANTITY,
         )
     }
@@ -3443,7 +3443,6 @@ fn command_distribute_stake(
     config: &Config,
     stake_pool_address: &Pubkey,
 ) -> CommandResult {
-                                // TODO ВРЕМЯ ТОЛЬКО КОНЕЦ ЭПОХИ
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
 
     let epoch = config.rpc_client.get_epoch_info()?.epoch;
@@ -3452,28 +3451,34 @@ fn command_distribute_stake(
     let contract_validators_quantity = validator_list.validators.len();
 
     let response = reqwest::blocking::get(ValidatorsInfo::url_get_current_validators())?;
-    let validators_api_response = serde_json::from_slice::<'_, ValidatorsApiResponse>(&response.bytes()?[..])?;
-    let backend_validators_quantity = validators_api_response.data.len();
+    let validators_api_response = serde_json::from_slice::<'_, PoolValidatorsApiResponse>(&response.bytes()?[..])?;
 
-    if contract_validators_quantity == 0 && backend_validators_quantity == 0 {
-        println!("There are no validators.");
+    if contract_validators_quantity == 0 {
+        println!("There are no validators in validator list.");
 
         return Ok(());
     }
-    if contract_validators_quantity != backend_validators_quantity {
-        return Err(
-            format!(
-                "Desynchronized state. The number of validators does not match. There are {} validators in contract and {} validators in backend",
-                contract_validators_quantity,
-                backend_validators_quantity
-            ).into()
-        );
-    }
+
+    let mut total_score_for_distribution_strategy: u128 = 0;
+    let mut contract_existing_validators_prepared_for_distribution_full_data: Vec<(&ValidatorStakeInfo, &PoolValidatorsData)> = vec![];
     '_a: for validator_stake_info in validator_list.validators.iter() {
         let mut is_exist = false;
         'b: for validators_data in validators_api_response.data.iter() {
-            if &validator_stake_info.vote_account_address.to_bytes()[..] == validators_data.vote_pk.as_bytes() {
+            if validator_stake_info.vote_account_address.to_string() == validators_data.vote_pk {
+                if validator_stake_info.last_update_epoch != epoch {
+                    return Err(
+                        format!(
+                            "{} validator is not updated.",
+                            validator_stake_info.vote_account_address
+                        ).into()
+                    );
+                }
+
+                total_score_for_distribution_strategy = total_score_for_distribution_strategy + u128::try_from(validators_data.score)?;
                 is_exist = true;
+                if validator_stake_info.transient_stake_lamports == 0 {
+                    contract_existing_validators_prepared_for_distribution_full_data.push((validator_stake_info, validators_data));
+                }
 
                 break 'b;
             }
@@ -3481,156 +3486,138 @@ fn command_distribute_stake(
         if !is_exist {
             return Err(
                 format!(
-                    "Desynchronized state. {} validator is not present in the backend.",
-                    validator_stake_info.vote_account_address
-                ).into()
-            );
-        }
-
-        if validator_stake_info.last_update_epoch == !epoch
-        {
-            return Err(
-                format!(
-                    "{} validator is not updated.",
+                    "Desynchronized state. {} validator is not present in the backend, therefore we cannot take information.",
                     validator_stake_info.vote_account_address
                 ).into()
             );
         }
     }
+    if contract_existing_validators_prepared_for_distribution_full_data.is_empty() {
+        return Err(
+            format!(
+                "Unable to make distribution. Since all validators have transient stake-accounts.",
+            ).into()
+        );
+    }
+    contract_existing_validators_prepared_for_distribution_full_data.sort_by(
+        |left: &(&ValidatorStakeInfo, &PoolValidatorsData), right: &(&ValidatorStakeInfo, &PoolValidatorsData)| -> Ordering {
+            if left.1.apy < right.1.apy {
+                Ordering::Greater
+            } else {
+                if left.1.apy > right.1.apy {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            }
+        }
+    );
 
     let stake_rent = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
-
     let active_lamports = config
         .rpc_client
         .get_balance(&stake_pool.reserve_stake)?
         .saturating_sub(stake_rent);
     if active_lamports > stake_pool.total_lamports_liquidity {
-        let mut total_lamports_for_distribution = active_lamports - stake_pool.total_lamports_liquidity;
+        let active_lamports_for_distribution = active_lamports - stake_pool.total_lamports_liquidity;
+        if active_lamports_for_distribution < MINIMUM_ACTIVE_STAKE {
+            println!("Not enough Sols for distribution.");
 
-        let mut total_score: u128 = 0;
-        for validators_data in validators_api_response.data.iter() {
-            total_score = total_score + u128::try_from(validators_data.score)?;
+            return Ok(());
         }
-
-        '_c: for validators_data in validators_api_response.data.iter() {
+        let mut active_lamports_for_distribution_ = active_lamports_for_distribution;
+        let mut validators_for_distribution_data: Vec<(&Pubkey, u64)> = vec![];
+        let mut amount_will_be_distributed: u64 = 0;
+        'd: for (validator_stake_info, validators_data) in contract_existing_validators_prepared_for_distribution_full_data.iter() {
             let validator_total_lamports_should_be_distributed = u64::try_from(
                 (stake_pool.total_lamports as u128)
                     .checked_mul(u128::try_from(validators_data.score)?)
                     .ok_or("Calculation error")?
-                    .checked_div(total_score)
+                    .checked_div(total_score_for_distribution_strategy)
                     .ok_or("Calculation error")?,
             )?;
-
-            '_d: for validator_stake_info in validator_list.validators.iter() {
-                if &validator_stake_info.vote_account_address.to_bytes()[..] == validators_data.vote_pk.as_bytes() {
-                    let lamports_needed_to_distribute = validator_total_lamports_should_be_distributed
-                        - validator_stake_info.active_stake_lamports
-                        - validator_stake_info.transient_stake_lamports;                                // TODO ЧТО если ЭТО снятие трансзита , а не депозит транзита
-
-                    if lamports_needed_to_distribute > 0 {
-                        if validator_stake_info.transient_stake_lamports == 0 {
-                            if total_lamports_for_distribution >= lamports_needed_to_distribute {
-                                if total_lamports_for_distribution - lamports_needed_to_distribute < MINIMUM_ACTIVE_STAKE {
-                                    increase_validator_stake(
-                                        config,
-                                        stake_pool_address,
-                                        &validator_stake_info.vote_account_address,
-                                        total_lamports_for_distribution,
-                                    )?;
-
-                                    return Ok(());
-                                } else {                            // lamports_needed_to_distribute на миниимум Эмоунт
-                                    increase_validator_stake(
-                                        config,
-                                        stake_pool_address,
-                                        &validator_stake_info.vote_account_address,
-                                        lamports_needed_to_distribute,
-                                    )?;
-        
-                                    total_lamports_for_distribution = total_lamports_for_distribution - lamports_needed_to_distribute;
-                                }
-                            } else {
-                                if total_lamports_for_distribution < MINIMUM_ACTIVE_STAKE {
-                                    println!("Not enough lamports for distribution.");
-                        
-                                    return Ok(());
-                                } else {
-                                    increase_validator_stake(
-                                        config,
-                                        stake_pool_address,
-                                        &validator_stake_info.vote_account_address,
-                                        total_lamports_for_distribution,
-                                    )?;
-
-                                    return Ok(());
-                                }
-                            }
-                        } else {
-
-                            
+            if validator_total_lamports_should_be_distributed >= validator_stake_info.active_stake_lamports {
+                let lamports_to_distribute_additionally = validator_total_lamports_should_be_distributed - validator_stake_info.active_stake_lamports;
+                if lamports_to_distribute_additionally > MINIMUM_ACTIVE_STAKE {
+                    if active_lamports_for_distribution_ >= lamports_to_distribute_additionally {
+                        validators_for_distribution_data.push((&validator_stake_info.vote_account_address, lamports_to_distribute_additionally));
+                        amount_will_be_distributed = amount_will_be_distributed + lamports_to_distribute_additionally;
+                        active_lamports_for_distribution_ = active_lamports_for_distribution_ - lamports_to_distribute_additionally;
+                    } else {
+                        if active_lamports_for_distribution_ >= MINIMUM_ACTIVE_STAKE {
+                            validators_for_distribution_data.push((&validator_stake_info.vote_account_address, active_lamports_for_distribution_));
+                            amount_will_be_distributed = amount_will_be_distributed + active_lamports_for_distribution_;
                         }
+
+                        break 'd;
                     }
                 }
             }
         }
-
-
+        if !validators_for_distribution_data.is_empty() {
+            '_e: for (i, (vote_address, lamports_for_distribution)) in validators_for_distribution_data.into_iter().enumerate() {
+                if i == 0 {
+                    increase_validator_stake(
+                        config,
+                        stake_pool_address,
+                        vote_address,
+                        lamports_for_distribution + active_lamports_for_distribution - amount_will_be_distributed
+                    )?;
+                } else {
+                    increase_validator_stake(
+                        config,
+                        stake_pool_address,
+                        vote_address,
+                        lamports_for_distribution
+                    )?;
+                }
+            }
+        } else {
+            increase_validator_stake(
+                config,
+                stake_pool_address,
+                &contract_existing_validators_prepared_for_distribution_full_data[0].0.vote_account_address,
+                active_lamports_for_distribution
+            )?;
+        }
     } else {
         if active_lamports == 0 {
             return Ok(());
         } else {
+            let mut lamports_for_liquidity_recovery = stake_pool.total_lamports_liquidity - active_lamports;
+            if lamports_for_liquidity_recovery < MINIMUM_ACTIVE_STAKE {
+                println!("Not enough Sols for distribution.");
 
+                return Ok(());
+            }
+            'g: for (validator_stake_info, _) in contract_existing_validators_prepared_for_distribution_full_data.iter().rev() {
+                if lamports_for_liquidity_recovery >= validator_stake_info.active_stake_lamports {
+                    if validator_stake_info.active_stake_lamports > MINIMUM_ACTIVE_STAKE {
+                        decrease_validator_stake(
+                            config,
+                            stake_pool_address,
+                            &validator_stake_info.vote_account_address,
+                            validator_stake_info.active_stake_lamports,
+                        )?;
+                        lamports_for_liquidity_recovery = lamports_for_liquidity_recovery - validator_stake_info.active_stake_lamports;
+                    }
+                } else {
+                    if lamports_for_liquidity_recovery >= MINIMUM_ACTIVE_STAKE {
+                        decrease_validator_stake(
+                            config,
+                            stake_pool_address,
+                            &validator_stake_info.vote_account_address,
+                            lamports_for_liquidity_recovery,
+                        )?;
+                    }
 
-
-            // TODO ВОсстановление ликвидносьи  // TODO Ликвидность восполнять
-            return Err("The number of Sol on the stake pool's reserve account is less than the number of liquidity Sol".into());
+                    break 'g;
+                }
+            }
         }
     }
-
-
-
-
-
-
-
-    // TODO DELEYE
-    println!(
-        "can distrivute: {}",
-        config
-            .rpc_client // TODO DELEYE
-            .get_balance(&stake_pool.reserve_stake)?
-            .saturating_sub(stake_rent)
-    );
-
-    // TODO Score по API
-
-    let validators_quantity = validator_list.validators.len() as u64;
-
-    let amount = config
-        .rpc_client // TODO считать аккуратно // MINIMUM_ACTIVE_STAKE нельзя класть меньше этого значения // Сюда еще идет +RentExcempt!!
-        .get_balance(&stake_pool.reserve_stake)?
-        .saturating_sub(stake_rent)
-        .saturating_sub(stake_pool.total_lamports_liquidity)
-        .checked_div(validators_quantity)
-        .unwrap();
-
-    for validator_stake_info in validator_list.validators.into_iter() {
-        if validator_stake_info.last_update_epoch == epoch
-            && validator_stake_info.status == StakeStatus::Active
-            && validator_stake_info.transient_stake_lamports == 0
-        {
-            increase_validator_stake(
-                config,
-                stake_pool_address,
-                &validator_stake_info.vote_account_address,
-                amount,
-            )?;
-        }
-    }
-
-    todo!();
 
     Ok(())
 }
@@ -3640,13 +3627,6 @@ fn command_withdraw_stake_for_subsequent_removing_validator(
     stake_pool_address: &Pubkey,
     vote_account: &Pubkey,
 ) -> CommandResult {
-    // Simulate result: Response { context: RpcResponseContext { slot: 118734932 }, value: RpcSimulateTransactionResult {
-    //  err: Some(InstructionError(0, AccountNotRentExempt)), logs: Some([“Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks invoke [1]“,
-    //      “Program log: Instruction: DecreaseValidatorStake”, “Program log: Need more than 2282880 lamports for transient stake to be rent-exempt,
-    //      4607 provided”, “Program log: Error: AccountNotRentExempt”, “Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks consumed 16077 of 200000
-    //      compute units”, “Program EverSFw9uN5t1V8kS3ficHUcKffSjwpGzUSGd7mgmSks failed: An account does not have enough lamports to be rent-exempt”]),
-    //      accounts: None, units_consumed: None } }
-
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
 
     let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
@@ -3654,12 +3634,18 @@ fn command_withdraw_stake_for_subsequent_removing_validator(
         .find(vote_account)
         .ok_or("Vote account not found in validator list")?;
 
-    decrease_validator_stake(
-        config,
-        stake_pool_address,
-        vote_account,
-        validator_stake_info.active_stake_lamports,
-    )
+    if validator_stake_info.active_stake_lamports >= MINIMUM_ACTIVE_STAKE {
+        return decrease_validator_stake(
+            config,
+            stake_pool_address,
+            vote_account,
+            validator_stake_info.active_stake_lamports,
+        );
+    } else {
+        println!("Not enough Sols for withdrawing.");
+
+        return Ok(());
+    }
 }
 
 fn command_check_accounts_for_rent_exempt(
@@ -3795,9 +3781,7 @@ pub struct PoolValidatorsMetaData {
 }
 
 fn command_check_existing_validators() -> CommandResult {
-    let response = reqwest::blocking::get(
-        "https://api.stakesolana.app/v1/pool-validators/EverSOL?offset=0&limit=50",
-    )?;
+    let response = reqwest::blocking::get(ValidatorsInfo::url_get_current_validators())?;
 
     let pool_validator_api_response =
         serde_json::from_slice::<'_, PoolValidatorsApiResponse>(&response.bytes()?[..])?;
@@ -3984,7 +3968,6 @@ const GAINING_PARAMETER_INITIALIZE_VALUE: u16 = 5100;
 const QUANTITY_OF_EPOCH_FOR_TOKEN_MINTING: u8 = 3;
 
 fn get_amount_of_community_tokens_by_dao_tokenomics(
-    config: &Config,
     community_token_staking_rewards: &CommunityTokenStakingRewards,
     pool_tokens_amount: f64,
     current_epoch: u64
@@ -4133,7 +4116,7 @@ fn command_dao_strategy_distribute_community_tokens(
         
             let pool_tokens_amount = spl_token::ui_amount_to_amount(associated_token_account.token_amount.ui_amount.unwrap(), associated_token_account.token_amount.decimals) as f64;
             if pool_tokens_amount > 0.0 {
-                if let Some(amount) = get_amount_of_community_tokens_by_dao_tokenomics(config, &community_token_staking_rewards, pool_tokens_amount, current_epoch)? {             
+                if let Some(amount) = get_amount_of_community_tokens_by_dao_tokenomics(&community_token_staking_rewards, pool_tokens_amount, current_epoch)? {             
                     match community_tokens_counter.get_dao_reserve_allowed_tokens_number(amount) {
                         Some(0) => return Err(format!("EVS DAO Reserve max supply reached: {}", 
                             spl_token::amount_to_ui_amount(CommunityTokensCounter::MAX_EVS_DAO_RESERVE_SUPPLY, CommunityTokensCounter::DECIMALS)).into()
