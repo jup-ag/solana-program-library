@@ -74,6 +74,8 @@ pub(crate) struct CliStakePool {
     pub next_sol_withdrawal_fee: Option<CliStakePoolFee>,
     pub last_epoch_pool_token_supply: u64,
     pub last_epoch_total_lamports: u64,
+    pub treasury_fee_account: String,
+    pub treasury_fee: CliStakePoolFee,
     pub details: Option<CliStakePoolDetails>,
 }
 
@@ -109,7 +111,8 @@ impl VerboseDisplay for CliStakePool {
         )?;
         writeln!(w, "Withdraw Authority: {}", &self.pool_withdraw_authority)?;
         writeln!(w, "Pool Token Mint: {}", &self.pool_mint)?;
-        writeln!(w, "Fee Account: {}", &self.manager_fee_account)?;
+        writeln!(w, "Manager (Epoch) Fee Account: {}", &self.manager_fee_account)?;
+        writeln!(w, "Treasury Fee Account: {}", &self.treasury_fee_account)?; 
         match &self.preferred_deposit_validator_vote_address {
             None => {}
             Some(s) => {
@@ -122,9 +125,9 @@ impl VerboseDisplay for CliStakePool {
                 writeln!(w, "Preferred Withraw Validator: {}", s)?;
             }
         }
-        writeln!(w, "Epoch Fee: {} of epoch rewards", &self.epoch_fee)?;
+        writeln!(w, "Manager (Epoch) Fee: {} of epoch rewards", &self.epoch_fee)?;
         if let Some(next_epoch_fee) = &self.next_epoch_fee {
-            writeln!(w, "Next Epoch Fee: {} of epoch rewards", next_epoch_fee)?;
+            writeln!(w, "Next Epoch Manager Fee: {} of epoch rewards", next_epoch_fee)?;
         }
         writeln!(
             w,
@@ -169,7 +172,8 @@ impl VerboseDisplay for CliStakePool {
             w,
             "SOL Deposit Referral Fee: {}% of SOL Deposit Fee",
             &self.sol_referral_fee
-        )?;
+        )?;           
+        writeln!(w, "Treasury Fee: {} of epoch rewards", &self.treasury_fee)?;
         match &self.details {
             None => {}
             Some(details) => {
@@ -201,7 +205,7 @@ impl Display for CliStakePool {
                 writeln!(f, "Preferred Withraw Validator: {}", s)?;
             }
         }
-        writeln!(f, "Epoch Fee: {} of epoch rewards", &self.epoch_fee)?;
+        writeln!(f, "Manager (Epoch) Fee: {} of epoch rewards", &self.epoch_fee)?;
         writeln!(
             f,
             "Stake Withdrawal Fee: {} of withdrawal amount",
@@ -232,6 +236,8 @@ impl Display for CliStakePool {
             "SOL Deposit Referral Fee: {}% of SOL Deposit Fee",
             &self.sol_referral_fee
         )?;
+        writeln!(f, "Treasury Fee: {} of epoch rewards", &self.treasury_fee)?;
+
         Ok(())
     }
 }
@@ -549,6 +555,8 @@ impl From<(Pubkey, StakePool, ValidatorList, Pubkey)> for CliStakePool {
                 .map(CliStakePoolFee::from),
             last_epoch_pool_token_supply: stake_pool.last_epoch_pool_token_supply,
             last_epoch_total_lamports: stake_pool.last_epoch_total_lamports,
+            treasury_fee_account: stake_pool.treasury_fee_account.to_string(),
+            treasury_fee: CliStakePoolFee::from(stake_pool.treasury_fee),
             details: None,
         }
     }
