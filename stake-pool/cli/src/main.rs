@@ -50,13 +50,16 @@ use {
         self, find_stake_program_address, find_transient_stake_program_address,
         find_withdraw_authority_program_address,
         instruction::{FundingType, PreferredValidatorType},
-        state::{Fee, FeeType, StakePool, ValidatorList, SimplePda, CommunityToken, DaoState, NetworkAccountType, CommunityTokenStakingRewards, CommunityTokenStakingRewardsCounter, AccountGroup, CommunityTokensCounter},
+        state::{Fee, FeeType, StakePool, ValidatorList, SimplePda, CommunityToken, DaoState,
+            NetworkAccountType, CommunityTokenStakingRewards, CommunityTokenStakingRewardsCounter, 
+            AccountGroup, CommunityTokensCounter, ReferrerList, MetricsDepositReferrer, MetricsDepositReferrerCounter},
         MINIMUM_ACTIVE_STAKE,
     },
     std::cmp::Ordering,
     std::convert::TryFrom,
     std::str::FromStr,
     std::{process::exit, sync::Arc},
+    std::cell::RefCell,
 };
 
 // use instruction::create_associated_token_account once ATA 1.0.5 is released
@@ -445,11 +448,218 @@ impl ValidatorsInfo {
             validators_to_be_removed,
         })
     }
+
+    fn get_apy_of_current_top(&self) -> Option<f64> {
+        if let Some(top_validator) = self.current_validators.vec.get(0) {
+            return Some(top_validator.apy);
+        }
+        None
+    }
 }
 
 fn command_show_validators_info(config: &Config) -> CommandResult {
     let validators_info = ValidatorsInfo::new()?;
     println!("{}", config.output_format.formatted_string(&validators_info));
+    Ok(())
+}
+
+#[derive(Default, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MetricsDepositReferrerCounterInfo {
+    max_accounts_in_group: u8,
+    group_initial_index: u64,   
+    group_index: u64,
+    account_index: u16,
+    total_accounts: u64,
+    flushed_group_index: u64,
+    flushed_account_index: u16,
+    total_flushed_accounts: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MetricsDepositReferrerInfo {
+    id: u64,
+    key: Pubkey,
+    epoch: u64,
+    timestamp: i64,
+    from: Pubkey,
+    referrer: Pubkey,
+    amount: u64,    
+}
+
+impl From<(u64, Pubkey, MetricsDepositReferrer)> for MetricsDepositReferrerInfo {
+    fn from(args: (u64, Pubkey, MetricsDepositReferrer)) -> Self {
+        let (id, key, metrics_referrer) = args;
+        Self {
+            id,
+            key,
+            epoch: metrics_referrer.epoch,
+            timestamp: metrics_referrer.timestamp,
+            from: metrics_referrer.from,
+            referrer: metrics_referrer.referrer,
+            amount: metrics_referrer.amount,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MetricsDepositReferrerInfoVec {
+    metrics_buffer: Vec<MetricsDepositReferrerInfo>,
+}
+
+impl MetricsDepositReferrerInfoVec {
+    fn new() -> Result<Self, Error> {
+        Ok(Self {
+            metrics_buffer: vec![],
+        })
+    }
+
+    pub fn fetch(&mut self, config: &Config, stake_pool_address: &Pubkey) -> Result<(), Error> {
+        let metrics_counter = MetricsDepositReferrerCounter::get(&config.rpc_client, stake_pool_address)?;
+        
+        let flushed_groups_cnt = metrics_counter.get_flushed_group().get_value();
+        // we may want to zero it after we pass by the first group
+        let mut flushed_accounts_cnt = metrics_counter.get_flushed_counter();
+        
+        let total_groups_cnt = metrics_counter.get_account().get_value();
+        let total_accounts_cnt = metrics_counter.get_counter();
+
+        let mut metrics_buffer = vec![];
+
+        // let's see what groups should be flushed starting from the most recent flushed group
+        for group_index in flushed_groups_cnt..=total_groups_cnt {
+            let lookup_bytes = (
+                NetworkAccountType::MetricsDepositRefferer,
+                AccountGroup::new(group_index),
+                spl_stake_pool::id(),
+                *stake_pool_address
+            ).try_to_vec()?;
+        
+            let rpc_program_account_config = solana_client::rpc_config::RpcProgramAccountsConfig {
+                filters: Some(vec![
+                    solana_client::rpc_filter::RpcFilterType::Memcmp(
+                        solana_client::rpc_filter::Memcmp {
+                            offset: 0,
+                            bytes: solana_client::rpc_filter::MemcmpEncodedBytes::Base58(bs58::encode(&lookup_bytes[..]).into_string()),
+                            encoding: None
+                        }
+                    )
+                ]),
+                account_config: solana_client::rpc_config::RpcAccountInfoConfig {
+                    encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
+                    data_slice: None,
+                    commitment: None
+                },
+                with_context: None
+        
+            };
+            let mut response = config.rpc_client.get_program_accounts_with_config(&spl_stake_pool::id(), rpc_program_account_config)?;  
+
+            // max number of accounts in the current group
+            // the last group may not be full
+            let current_max_accounts_cnt = if total_groups_cnt == group_index {
+                total_accounts_cnt
+            } else {
+                MetricsDepositReferrerCounter::MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP as u16
+            };
+
+            for account_index in flushed_accounts_cnt..current_max_accounts_cnt {
+                let id = MetricsDepositReferrerCounter::get_id_by_indexes(group_index, account_index);
+                let (addr, _) = MetricsDepositReferrer::find_address(
+                    &spl_stake_pool::id(),
+                    stake_pool_address,
+                    id,
+                );
+
+                let vec_index = response.iter().position(|(x_addr, _)| *x_addr == addr);
+                if vec_index.is_none() {
+                    continue;
+                }
+                let vec_index = vec_index.unwrap();
+                let (_, metrics_referrer_account) = &response[vec_index];
+                let metrics_referrer = try_from_slice_unchecked::<MetricsDepositReferrer>(&metrics_referrer_account.data[..])?;
+                metrics_buffer.push(MetricsDepositReferrerInfo::from((id, addr, metrics_referrer)));
+                response.remove(vec_index);
+            }
+
+            // next group accounts counter starting from 0
+            flushed_accounts_cnt = 0;       
+        }
+
+        self.metrics_buffer.append(&mut metrics_buffer);
+
+        Ok(())
+    }
+
+    // Flush metrics to csv
+    // Remove flushed accounts
+    // Clear the buffer and update the counter
+    pub fn flush(&mut self, config: &Config, stake_pool_address: &Pubkey) -> Result<(), Error> {
+        // TODO: Flush to csv
+
+        // Remove flushed accounts and update the metrics counter accordingly
+        const ACCOUNTS_IN_INSTRUCTION: usize = 10;
+        const INSTRUCTIONS_IN_TRANSACTION: usize = 5;
+        let mut instructions = vec![];
+        let accounts_keys = RefCell::new(vec![]);
+
+        let signers = vec![
+            config.manager.as_ref(),
+        ];        
+
+        let metrics_counter_addr = MetricsDepositReferrerCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+
+        let mut form_and_send = |acc_threshold: usize, instr_threshold: usize| -> Result<(), Error> {
+            if accounts_keys.borrow().len() >= acc_threshold {
+                instructions.push(
+                    spl_stake_pool::instruction::remove_metrics_deposit_referrer(
+                        &spl_stake_pool::id(), 
+                        stake_pool_address, 
+                        &config.manager.pubkey(), 
+                        &metrics_counter_addr, 
+                        accounts_keys.borrow().clone(),
+                    )
+                );
+                accounts_keys.borrow_mut().clear(); 
+            } 
+            
+            if instructions.len() >= instr_threshold {
+                let mut transaction = Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
+                let recent_blockhash = config.rpc_client.get_latest_blockhash()?;
+                transaction.sign(&signers, recent_blockhash);
+                send_transaction(config, transaction)?;
+                instructions.clear();
+            }
+            Ok(())
+        };
+
+        for metrics_info in &self.metrics_buffer {
+            accounts_keys.borrow_mut().push(metrics_info.key);
+            form_and_send(ACCOUNTS_IN_INSTRUCTION, INSTRUCTIONS_IN_TRANSACTION)?;
+        }
+        form_and_send(1,1)?;
+
+        self.metrics_buffer.clear();
+
+        Ok(())
+    }
+}
+
+fn command_show_metrics_deposit_referrer(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
+    let mut referrer_metrics_info_vec = MetricsDepositReferrerInfoVec::new()?;
+    referrer_metrics_info_vec.fetch(config, stake_pool_address)?;
+    println!("{}", config.output_format.formatted_string(&referrer_metrics_info_vec));
+
+    Ok(())
+}
+
+fn command_flush_metrics_deposit_referrer(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
+    let mut referrer_metrics_info_vec = MetricsDepositReferrerInfoVec::new()?;
+    referrer_metrics_info_vec.fetch(config, stake_pool_address)?;
+    referrer_metrics_info_vec.flush(config, stake_pool_address)?;
+
     Ok(())
 }
 
@@ -463,6 +673,7 @@ fn command_create_pool(
     treasury_fee: Fee,
     referral_fee: u8,
     max_validators: u32,
+    max_referrers: u32,
     stake_pool_keypair: Option<Keypair>,
     validator_list_keypair: Option<Keypair>,
     mint_keypair: Option<Keypair>,
@@ -748,6 +959,27 @@ fn command_create_pool(
             )
         );
     }
+
+    let referrer_list_address = ReferrerList::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0;
+    initialize_instructions.push(
+        spl_stake_pool::instruction::create_referrer_list(
+            &spl_stake_pool::id(),
+            &stake_pool_keypair.pubkey(),
+            &config.manager.pubkey(),
+            &referrer_list_address,
+            max_referrers,
+        )
+    );
+
+    let metrics_deposit_referrer_counter_dto = MetricsDepositReferrerCounter::find_address(&spl_stake_pool::id(), &stake_pool_keypair.pubkey()).0;
+    initialize_instructions.push(
+        spl_stake_pool::instruction::create_metrics_deposit_referrer_counter(
+            &spl_stake_pool::id(),
+            &stake_pool_keypair.pubkey(),
+            &config.manager.pubkey(),
+            &metrics_deposit_referrer_counter_dto,
+        )
+    );
 
     let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
     let setup_message = Message::new_with_blockhash(
@@ -1939,11 +2171,17 @@ fn command_dao_strategy_deposit_sol(
     stake_pool_address: &Pubkey,
     from: &Option<Keypair>,
     pool_token_receiver_account: &Option<Pubkey>,
-    referrer_token_account: &Option<Pubkey>,
+    referrer_address: &Option<Pubkey>,
     amount: f64,
 ) -> CommandResult {
     if !config.no_update {
         command_update(config, stake_pool_address, false, false)?;
+    }
+    if let Some(referrer_address) = referrer_address {
+        let referrer_list = ReferrerList::get(&config.rpc_client, stake_pool_address)?;
+        if !referrer_list.contains(referrer_address) {
+            return Err(format!("Referrer {} is not in the pool's referrer list", referrer_address).into());
+        }        
     }
 
     let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
@@ -2043,8 +2281,6 @@ fn command_dao_strategy_deposit_sol(
             &mut total_rent_free_balances,
         ));
 
-    let referrer_token_account = referrer_token_account.unwrap_or(pool_token_receiver_account);
-
     let dao_community_token_receiver_account = add_associated_token_account(
         config,
         &community_token.token_mint,
@@ -2055,6 +2291,17 @@ fn command_dao_strategy_deposit_sol(
 
     let pool_withdraw_authority =
         find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let referrer_list_address =
+        ReferrerList::find_address(&spl_stake_pool::id(), &stake_pool_address).0;
+    let metrics_deposit_referrer_counter_pubkey =
+        MetricsDepositReferrerCounter::find_address(&spl_stake_pool::id(), &stake_pool_address).0;
+    let metrics_deposit_referrer_counter = MetricsDepositReferrerCounter::get(&config.rpc_client, stake_pool_address)?;
+
+    let metrics_deposit_referrer_pubkey = MetricsDepositReferrer::find_address(
+        &spl_stake_pool::id(),
+        &stake_pool_address,
+        metrics_deposit_referrer_counter.get_number_of_accounts(),
+    ).0;
 
     let deposit_instruction = if let Some(deposit_authority) = config.funding_authority.as_ref() {
         let expected_sol_deposit_authority = stake_pool.sol_deposit_authority.ok_or_else(|| {
@@ -2070,42 +2317,87 @@ fn command_dao_strategy_deposit_sol(
             return Err(error.into());
         }
 
-        spl_stake_pool::instruction::dao_strategy_deposit_sol_with_authority(
-            &spl_stake_pool::id(),
-            stake_pool_address,
-            &deposit_authority.pubkey(),
-            &pool_withdraw_authority,
-            &stake_pool.reserve_stake,
-            &user_sol_transfer.pubkey(),
-            &pool_token_receiver_account,
-            &dao_community_token_receiver_account,
-            &stake_pool.manager_fee_account,
-            &referrer_token_account,
-            &stake_pool.pool_mint,
-            &spl_token::id(),
-            &community_token_staking_rewards_dto_pubkey,
-            &from_pubkey,
-            &community_token_dto_pubkey,
-            amount,
-        )
+        if let Some(referrer_address) = referrer_address {
+            spl_stake_pool::instruction::dao_strategy_deposit_sol_with_authority_and_referrer(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &deposit_authority.pubkey(),
+                &pool_withdraw_authority,
+                &stake_pool.reserve_stake,
+                &user_sol_transfer.pubkey(),
+                &pool_token_receiver_account,
+                &dao_community_token_receiver_account,
+                &stake_pool.manager_fee_account,
+                &referrer_address,
+                &referrer_list_address,
+                &metrics_deposit_referrer_pubkey,
+                &metrics_deposit_referrer_counter_pubkey,
+                &stake_pool.pool_mint,
+                &spl_token::id(),
+                &community_token_staking_rewards_dto_pubkey,
+                &from_pubkey,
+                &community_token_dto_pubkey,
+                amount,
+            )
+        } else {
+            spl_stake_pool::instruction::dao_strategy_deposit_sol_with_authority(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &deposit_authority.pubkey(),
+                &pool_withdraw_authority,
+                &stake_pool.reserve_stake,
+                &user_sol_transfer.pubkey(),
+                &pool_token_receiver_account,
+                &dao_community_token_receiver_account,
+                &stake_pool.manager_fee_account,
+                &stake_pool.pool_mint,
+                &spl_token::id(),
+                &community_token_staking_rewards_dto_pubkey,
+                &from_pubkey,
+                &community_token_dto_pubkey,
+                amount,
+            )
+        }
     } else {
-        spl_stake_pool::instruction::dao_strategy_deposit_sol(
-            &spl_stake_pool::id(),
-            stake_pool_address,
-            &pool_withdraw_authority,
-            &stake_pool.reserve_stake,
-            &user_sol_transfer.pubkey(),
-            &pool_token_receiver_account,
-            &dao_community_token_receiver_account,
-            &stake_pool.manager_fee_account,
-            &referrer_token_account,
-            &stake_pool.pool_mint,
-            &spl_token::id(),
-            &community_token_staking_rewards_dto_pubkey,
-            &from_pubkey,
-            &community_token_dto_pubkey,
-            amount,
-        )
+        if let Some(referrer_address) = referrer_address {
+            spl_stake_pool::instruction::dao_strategy_deposit_sol_with_referrer(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &pool_withdraw_authority,
+                &stake_pool.reserve_stake,
+                &user_sol_transfer.pubkey(),
+                &pool_token_receiver_account,
+                &dao_community_token_receiver_account,
+                &stake_pool.manager_fee_account,
+                &referrer_address,
+                &referrer_list_address,
+                &metrics_deposit_referrer_pubkey,
+                &metrics_deposit_referrer_counter_pubkey,
+                &stake_pool.pool_mint,
+                &spl_token::id(),
+                &community_token_staking_rewards_dto_pubkey,
+                &from_pubkey,
+                &community_token_dto_pubkey,
+                amount,
+            )
+        } else {
+            spl_stake_pool::instruction::dao_strategy_deposit_sol(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &pool_withdraw_authority,
+                &stake_pool.reserve_stake,
+                &user_sol_transfer.pubkey(),
+                &pool_token_receiver_account,
+                &dao_community_token_receiver_account,
+                &stake_pool.manager_fee_account,
+                &stake_pool.pool_mint,
+                &spl_token::id(),
+                &community_token_staking_rewards_dto_pubkey,
+                &from_pubkey,
+                &community_token_dto_pubkey,
+                amount,
+            )
+        }
     };
 
     instructions.push(deposit_instruction);
@@ -2188,14 +2480,24 @@ fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
             get_community_tokens_counter(&config.rpc_client, stake_pool_address)?,
         )));
     }
+    let referrer_list_storage_account = ReferrerList::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let referrer_list = ReferrerList::get(&config.rpc_client, stake_pool_address).unwrap_or_default();
 
     let mut cli_stake_pool = CliStakePool::from((
         *stake_pool_address,
         stake_pool,
         validator_list,
         pool_withdraw_authority,
+        referrer_list,
+        referrer_list_storage_account,
     ));
     let update_required = last_update_epoch != epoch_info.epoch;
+
+    let mut metrics_deposit_referrer_counter = None;
+    if let Ok(metrics_deposit_referrer_counter_raw) = MetricsDepositReferrerCounter::get(&config.rpc_client, stake_pool_address) {
+        metrics_deposit_referrer_counter = Some(MetricsDepositReferrerCounterInfo::from(metrics_deposit_referrer_counter_raw));
+    }
+
     let cli_stake_pool_details = CliStakePoolDetails {
         reserve_stake_account_address,
         reserve_stake_lamports: reserve_stake.lamports,
@@ -2207,11 +2509,28 @@ fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
         current_number_of_validators: current_number_of_validators as u32,
         max_number_of_validators,
         update_required,
+        metrics_deposit_referrer_counter,
         dao_details,
     };
     cli_stake_pool.details = Some(cli_stake_pool_details);
     println!("{}", config.output_format.formatted_string(&cli_stake_pool));
     Ok(())
+}
+
+fn calculate_max_validator_yield_per_epoch_numerator() -> u32 {
+    // let's try to get max APY of the current validators
+    let mut max_validator_yield_per_epoch_numerator = StakePool::DEFAULT_VALIDATOR_YIELD_PER_EPOCH_NUMERATOR;
+    if let Ok(validator_info) = ValidatorsInfo::new() {
+        if let Some(apy) = validator_info.get_apy_of_current_top() {
+            // eliminate unrealistic APY
+            if apy > 0.0 && apy < 0.20 {
+                // calculate using the compund interest formula
+                max_validator_yield_per_epoch_numerator = (((apy+1.0).powf(1.0/StakePool::DEFAULT_EPOCHS_PER_YEAR as f64)-1.0) 
+                    * StakePool::VALIDATOR_YIELD_PER_EPOCH_DENOMINATOR as f64).round() as u32;
+            }
+        }
+    }
+    max_validator_yield_per_epoch_numerator
 }
 
 fn command_update(
@@ -2288,6 +2607,7 @@ fn command_update(
     }
 
     let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
+    let max_validator_yield_per_epoch_numerator = calculate_max_validator_yield_per_epoch_numerator();
 
     let (mut update_list_instructions, final_instructions) =
         spl_stake_pool::instruction::update_stake_pool(
@@ -2297,6 +2617,7 @@ fn command_update(
             &validator_list,
             stake_pool_address,
             no_merge,
+            max_validator_yield_per_epoch_numerator,
         );
 
     let update_list_instructions_len = update_list_instructions.len();
@@ -4309,6 +4630,179 @@ fn command_dao_strategy_distribute_community_tokens(
     Ok(())
 }
 
+fn command_create_referrer_list(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    max_number_of_referrers: u32,
+) -> CommandResult {
+    let referrer_list_dto_pubkey = ReferrerList::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let empty_referrer_list = ReferrerList::new(max_number_of_referrers);
+    let referrer_list_dto_length = get_instance_packed_len(&empty_referrer_list)?;
+    
+    let rent_exemption_for_referrer_list_dto_account = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(referrer_list_dto_length)?;
+
+    let instruction = spl_stake_pool::instruction::create_referrer_list(
+        &spl_stake_pool::id(),
+        stake_pool_address,
+        &config.manager.pubkey(),
+        &referrer_list_dto_pubkey,
+        max_number_of_referrers,
+    );
+
+    let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&config.fee_payer.pubkey()),
+        &recent_blockhash,
+    );
+
+    let total_consumption = rent_exemption_for_referrer_list_dto_account
+        + config.rpc_client.get_fee_for_message(&message)?;
+    check_fee_payer_balance(
+        config,
+        total_consumption
+    )?;
+
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        config.manager.as_ref(),
+    ];
+    unique_signers!(signers);
+
+    send_transaction(config, Transaction::new(&signers, message, recent_blockhash))?;
+
+    Ok(())
+}
+
+fn command_add_referrer(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    referrer_address: &Pubkey,
+) -> CommandResult {
+    let referrer_list_dto_pubkey = ReferrerList::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let referrer_list = ReferrerList::get(&config.rpc_client, stake_pool_address)?;
+    if referrer_list.contains(referrer_address) {
+        return Err("Referrer already added to the referrer list".into())
+    }
+
+    let instruction = spl_stake_pool::instruction::add_referrer(
+        &spl_stake_pool::id(),
+        stake_pool_address,
+        &config.manager.pubkey(),
+        &referrer_list_dto_pubkey,
+        referrer_address,
+    );
+
+    let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&config.fee_payer.pubkey()),
+        &recent_blockhash,
+    );
+
+    check_fee_payer_balance(
+        config,
+        config.rpc_client.get_fee_for_message(&message)?,
+    )?;
+
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        config.manager.as_ref(),
+    ];
+    unique_signers!(signers);
+
+    send_transaction(config, Transaction::new(&signers, message, recent_blockhash))?;
+
+    Ok(())
+}
+
+fn command_remove_referrer(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    referrer_address: &Pubkey,
+) -> CommandResult {
+    let referrer_list_dto_pubkey = ReferrerList::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let referrer_list = ReferrerList::get(&config.rpc_client, stake_pool_address)?;
+    if !referrer_list.contains(referrer_address) {
+        return Err("Referrer not found in the referrer list".into())
+    }    
+
+    let instruction = spl_stake_pool::instruction::remove_referrer(
+        &spl_stake_pool::id(),
+        stake_pool_address,
+        &config.manager.pubkey(),
+        &referrer_list_dto_pubkey,
+        referrer_address,
+    );
+
+    let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&config.fee_payer.pubkey()),
+        &recent_blockhash,
+    );
+
+    check_fee_payer_balance(
+        config,
+        config.rpc_client.get_fee_for_message(&message)?,
+    )?;
+
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        config.manager.as_ref(),
+    ];
+    unique_signers!(signers);
+
+    send_transaction(config, Transaction::new(&signers, message, recent_blockhash))?;
+
+    Ok(())
+}
+
+fn command_create_metrics_deposit_referrer_counter(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+) -> CommandResult {
+    let metrics_deposit_referrer_counter_pubkey = MetricsDepositReferrerCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
+    let metrics_deposit_referrer_counter_dto_length = get_packed_len::<MetricsDepositReferrerCounter>();
+    
+    let rent_exemption_for_referrer_list_dto_account = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(metrics_deposit_referrer_counter_dto_length)?;
+
+    let instruction = spl_stake_pool::instruction::create_metrics_deposit_referrer_counter(
+        &spl_stake_pool::id(),
+        stake_pool_address,
+        &config.manager.pubkey(),
+        &metrics_deposit_referrer_counter_pubkey,
+    );
+
+    let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&config.fee_payer.pubkey()),
+        &recent_blockhash,
+    );
+
+    let total_consumption = rent_exemption_for_referrer_list_dto_account
+        + config.rpc_client.get_fee_for_message(&message)?;
+    check_fee_payer_balance(
+        config,
+        total_consumption
+    )?;
+
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        config.manager.as_ref(),
+    ];
+    unique_signers!(signers);
+
+    send_transaction(config, Transaction::new(&signers, message, recent_blockhash))?;
+
+    Ok(())
+}
+
 fn main() {
     solana_logger::setup_with_default("solana=info");
 
@@ -4499,6 +4993,15 @@ fn main() {
                     .takes_value(true)
                     .required(true)
                     .help("Max number of validators included in the stake pool"),
+            )
+            .arg(
+                Arg::with_name("max_referrers")
+                    .long("max-referrers")
+                    .validator(is_parsable::<u32>)
+                    .value_name("NUMBER")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Max number of referrers included in the stake pool"),
             )
             .arg(
                 Arg::with_name("deposit_authority")
@@ -5479,6 +5982,105 @@ fn main() {
         .subcommand(SubCommand::with_name("show-validators-info")
             .about("Show comprehensive information about validators")
         )
+        .subcommand(SubCommand::with_name("create-referrer-list")
+            .about("Create a stake pool's referrer list. Must be signed by the pool manager.")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+            .arg(
+                Arg::with_name("max_referrers")
+                    .index(2)
+                    .validator(is_parsable::<u32>)
+                    .value_name("NUMBER")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Max number of referrers included in the stake pool"),
+            )
+        )
+        .subcommand(SubCommand::with_name("add-referrer")
+            .about("Add referrer to the stake pool's referrer list. Must be signed by the pool manager.")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+            .arg(
+                Arg::with_name("referrer_address")
+                    .index(2)
+                    .validator(is_pubkey)
+                    .value_name("REFERRER_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Referrer address"),
+            )
+        )
+        .subcommand(SubCommand::with_name("remove-referrer")
+            .about("Remove referrer from the stake pool's referrer list. Must be signed by the pool manager.")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+            .arg(
+                Arg::with_name("referrer_address")
+                    .index(2)
+                    .validator(is_pubkey)
+                    .value_name("REFERRER_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Referrer address"),
+            )
+        )
+        .subcommand(SubCommand::with_name("create-metrics-deposit-referrer-counter")
+            .about("Create a counter for metrics of deposit sol with referrer transactions. Must be signed by the pool manager.")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+        )
+        .subcommand(SubCommand::with_name("show-metrics-deposit-referrer")
+            .about("Show metrics of deposit sol with referrer transactions")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+        )
+        .subcommand(SubCommand::with_name("flush-metrics-deposit-referrer")
+            .about("Flush metrics of deposit sol with referrer transactions")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -5584,6 +6186,7 @@ fn main() {
             let d_denominator = value_t!(arg_matches, "deposit_fee_denominator", u64);
             let referral_fee = value_t!(arg_matches, "referral_fee", u8);
             let max_validators = value_t_or_exit!(arg_matches, "max_validators", u32);
+            let max_referrers = value_t_or_exit!(arg_matches, "max_referrers", u32);
             let pool_keypair = keypair_of(arg_matches, "pool_keypair");
             let validator_list_keypair = keypair_of(arg_matches, "validator_list_keypair");
             let mint_keypair = keypair_of(arg_matches, "mint_keypair");
@@ -5612,6 +6215,7 @@ fn main() {
                 },
                 referral_fee.unwrap_or(0),
                 max_validators,
+                max_referrers,
                 pool_keypair,
                 validator_list_keypair,
                 mint_keypair,
@@ -6004,6 +6608,33 @@ fn main() {
             command_dao_strategy_distribute_community_tokens(&config, &stake_pool_address)
         }
         ("show-validators-info", _) => command_show_validators_info(&config),
+        ("create-referrer-list", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let max_referrers = value_t_or_exit!(arg_matches, "max_referrers", u32);
+            command_create_referrer_list(&config, &stake_pool_address, max_referrers)
+        }
+        ("add-referrer", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let referrer_address = pubkey_of(arg_matches, "referrer_address").unwrap();
+            command_add_referrer(&config, &stake_pool_address, &referrer_address)
+        }
+        ("remove-referrer", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let referrer_address = pubkey_of(arg_matches, "referrer_address").unwrap();
+            command_remove_referrer(&config, &stake_pool_address, &referrer_address)
+        }
+        ("create-metrics-deposit-referrer-counter", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            command_create_metrics_deposit_referrer_counter(&config, &stake_pool_address)
+        }
+        ("show-metrics-deposit-referrer", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            command_show_metrics_deposit_referrer(&config, &stake_pool_address)
+        }
+        ("flush-metrics-deposit-referrer", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            command_flush_metrics_deposit_referrer(&config, &stake_pool_address)
+        }
         _ => unreachable!(),
     }
     .map_err(|err| {

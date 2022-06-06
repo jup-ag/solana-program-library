@@ -254,7 +254,9 @@ pub enum StakePoolInstruction {
     ///   6. `[w]` Pool mint account
     ///   7. `[w]` Account to receive treasury fee tokens
     ///   8. `[]` Pool token program
-    UpdateStakePoolBalance,
+    /// 
+    ///   userdata: max_validator_yield_per_epoch_numerator
+    UpdateStakePoolBalance(u32),
 
     ///   Cleans up validator stake account entries marked as `ReadyForRemoval`
     ///
@@ -614,6 +616,78 @@ pub enum StakePoolInstruction {
     ///   6. '[]' Sysvar stake history account
     ///   7. `[]` Stake program id,
     MergeInactiveStake,
+
+    ///   Create account for pool's referrer list
+    /// 
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Account for pool's referrer list
+    ///   3. `[]` Rent sysvar
+    ///   4. `[]` System program account 
+    /// 
+    ///   userdata: maximum number of referrers in the list  
+    CreateReferrerList(u32),
+
+    ///   Add a referrer to the pool's referrer list
+    /// 
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Account for pool's referrer list
+    ///   3. `[]` Referrer's account
+    AddReferrer,
+
+    ///   Deposit SOL directly into the pool's reserve account with existing DAO`s community tokens strategy. The output is a "pool" token
+    ///   representing ownership into the pool. Inputs are converted to the current ratio.
+    ///   This instructions is a part of our Referral program and must include a whitelisted referral.
+    ///
+    ///   0. `[w]` Stake pool
+    ///   1. `[]` Stake pool withdraw authority
+    ///   2. `[w]` Reserve stake account, to deposit SOL
+    ///   3. `[s]` Account providing the lamports to be deposited into the pool
+    ///   4. `[w]` User account to receive pool tokens
+    ///   5  `[]` User account to hold DAO`s community tokens
+    ///   6. `[w]` Account to receive fee tokens
+    ///   7. `[w]` Account to receive a portion of fee in SOL as referral fees
+    ///   8. `[]` Referrer list dto account
+    ///   9  `[w]` Account for storing metrics of deposit sol with refferer transaction
+    ///  10. `[w]` Metrics counter for deposit sol transactions (dto account)
+    ///  11. `[w]` Pool token mint account
+    ///  11. `[]` System program account
+    ///  12. `[]` Rent sysvar   
+    ///  13. `[]` Token program id
+    ///  14. `[w]` Account for storing community token staking rewards dto
+    ///  15. `[s]` Wallet owner
+    ///  16. `[]` Account for storing community token dto
+    ///  17. `[s]` (Optional) Stake pool sol deposit authority.
+    DaoStrategyDepositSolWithReferrer(u64),
+
+    ///   Remove a referrer from the pool's referrer list
+    /// 
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Account for pool's referrer list
+    ///   3. `[]` Referrer's account
+    RemoveReferrer,
+
+    ///   Create account for storing counter for metrics of deposit sol transactions with referrer
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Account for storing counter for metrics of deposit sol transactions with referrer
+    ///   3. `[]` Rent sysvar
+    ///   4. `[]` System program account
+    CreateMetricsDepositReferrerCounter,
+
+    ///   Remove metrics accounts of deposit sol transactions with referrer
+    ///   We don't need metrics flushed to DB
+    /// 
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[w]` Account for storing counter for metrics of deposit sol transactions with referrer
+    ///   3. `[]` System program account
+    ///   4. `[w]` Metrics account
+    ///   5.. `[w]` (Optional) Metrics accounts
+    /// 
+    RemoveMetricsDepositReferrer,
 }
 
 /// Creates an 'initialize' instruction.
@@ -1035,6 +1109,7 @@ pub fn update_stake_pool_balance(
     stake_pool_mint: &Pubkey,
     treasury_fee_account: &Pubkey,
     token_program_id: &Pubkey,
+    max_validator_yield_per_epoch_numerator: u32,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new(*stake_pool, false),
@@ -1050,7 +1125,7 @@ pub fn update_stake_pool_balance(
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::UpdateStakePoolBalance
+        data: StakePoolInstruction::UpdateStakePoolBalance(max_validator_yield_per_epoch_numerator)
             .try_to_vec()
             .unwrap(),
     }
@@ -1086,6 +1161,7 @@ pub fn update_stake_pool(
     validator_list: &ValidatorList,
     stake_pool_address: &Pubkey,
     no_merge: bool,
+    max_validator_yield_per_epoch_numerator: u32,
 ) -> (Vec<Instruction>, Vec<Instruction>) {
     let vote_accounts: Vec<Pubkey> = validator_list
         .validators
@@ -1126,6 +1202,7 @@ pub fn update_stake_pool(
             &stake_pool.pool_mint,
             &stake_pool.treasury_fee_account,
             &stake_pool.token_program_id,
+            max_validator_yield_per_epoch_numerator,
         ),
         cleanup_removed_validator_entries(
             program_id,
@@ -1767,7 +1844,6 @@ pub fn dao_strategy_deposit_sol(
     pool_tokens_to: &Pubkey,
     dao_community_tokens_to: &Pubkey,
     manager_fee_account: &Pubkey,
-    referrer_pool_tokens_account: &Pubkey,
     pool_mint: &Pubkey,
     token_program_id: &Pubkey,
     community_token_staking_rewards_dto: &Pubkey,
@@ -1783,7 +1859,7 @@ pub fn dao_strategy_deposit_sol(
         AccountMeta::new(*pool_tokens_to, false),
         AccountMeta::new_readonly(*dao_community_tokens_to, false),
         AccountMeta::new(*manager_fee_account, false),
-        AccountMeta::new(*referrer_pool_tokens_account, false),
+        AccountMeta::new(*manager_fee_account, false),
         AccountMeta::new(*pool_mint, false),
         AccountMeta::new_readonly(system_program::id(), false),
         AccountMeta::new_readonly(*token_program_id, false),
@@ -1795,6 +1871,57 @@ pub fn dao_strategy_deposit_sol(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::DaoStrategyDepositSol(amount)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instructions required to deposit SOL directly into a stake pool with existing DAO`s community tokens strategy.
+/// This instructions is a part of our Referral program and must include a whitelisted referral.
+pub fn dao_strategy_deposit_sol_with_referrer(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    lamports_from: &Pubkey,
+    pool_tokens_to: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    manager_fee_account: &Pubkey,
+    referrer_sol_account: &Pubkey,
+    referrer_list_account: &Pubkey,
+    metrics_deposit_referrer_dto: &Pubkey,
+    metrics_deposit_referrer_counter_dto: &Pubkey,
+    pool_mint: &Pubkey,
+    token_program_id: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_dto_pubkey: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*lamports_from, true),
+        AccountMeta::new(*pool_tokens_to, false),
+        AccountMeta::new_readonly(*dao_community_tokens_to, false),
+        AccountMeta::new(*manager_fee_account, false),
+        AccountMeta::new(*referrer_sol_account, false),
+        AccountMeta::new_readonly(*referrer_list_account, false),
+        AccountMeta::new(*metrics_deposit_referrer_dto, false),
+        AccountMeta::new(*metrics_deposit_referrer_counter_dto, false),
+        AccountMeta::new(*pool_mint, false),
+        AccountMeta::new_readonly(system_program::id(), false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::DaoStrategyDepositSolWithReferrer(amount)
             .try_to_vec()
             .unwrap(),
     }
@@ -1813,7 +1940,6 @@ pub fn dao_strategy_deposit_sol_with_authority(
     pool_tokens_to: &Pubkey,
     dao_community_tokens_to: &Pubkey,
     manager_fee_account: &Pubkey,
-    referrer_pool_tokens_account: &Pubkey,
     pool_mint: &Pubkey,
     token_program_id: &Pubkey,
     community_token_staking_rewards_dto: &Pubkey,
@@ -1829,7 +1955,7 @@ pub fn dao_strategy_deposit_sol_with_authority(
         AccountMeta::new(*pool_tokens_to, false),
         AccountMeta::new_readonly(*dao_community_tokens_to, false),
         AccountMeta::new(*manager_fee_account, false),
-        AccountMeta::new(*referrer_pool_tokens_account, false),
+        AccountMeta::new(*manager_fee_account, false),
         AccountMeta::new(*pool_mint, false),
         AccountMeta::new_readonly(system_program::id(), false),
         AccountMeta::new_readonly(*token_program_id, false),
@@ -1842,6 +1968,62 @@ pub fn dao_strategy_deposit_sol_with_authority(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::DaoStrategyDepositSol(amount)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Creates instructions required to deposit SOL directly into a stake pool with existing DAO`s community tokens strategy.
+/// This instructions is a part of our Referral program and must include a whitelisted referral.
+/// The difference with `deposit_sol_with_referrer()` is that a deposit
+/// authority must sign this instruction.
+/// 
+pub fn dao_strategy_deposit_sol_with_authority_and_referrer(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    sol_deposit_authority: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    reserve_stake_account: &Pubkey,
+    lamports_from: &Pubkey,
+    pool_tokens_to: &Pubkey,
+    dao_community_tokens_to: &Pubkey,
+    manager_fee_account: &Pubkey,
+    referrer_sol_account: &Pubkey,
+    referrer_list_account: &Pubkey,
+    metrics_deposit_referrer_dto: &Pubkey,
+    metrics_deposit_referrer_counter_dto: &Pubkey,
+    pool_mint: &Pubkey,
+    token_program_id: &Pubkey,
+    community_token_staking_rewards_dto: &Pubkey,
+    owner_wallet: &Pubkey,
+    community_token_dto_pubkey: &Pubkey,
+    amount: u64,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new(*reserve_stake_account, false),
+        AccountMeta::new(*lamports_from, true),
+        AccountMeta::new(*pool_tokens_to, false),
+        AccountMeta::new_readonly(*dao_community_tokens_to, false),
+        AccountMeta::new(*manager_fee_account, false),
+        AccountMeta::new(*referrer_sol_account, false),
+        AccountMeta::new_readonly(*referrer_list_account, false),
+        AccountMeta::new(*metrics_deposit_referrer_dto, false),
+        AccountMeta::new(*metrics_deposit_referrer_counter_dto, false),
+        AccountMeta::new(*pool_mint, false),
+        AccountMeta::new_readonly(system_program::id(), false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
+        AccountMeta::new_readonly(*token_program_id, false),
+        AccountMeta::new(*community_token_staking_rewards_dto, false),
+        AccountMeta::new_readonly(*owner_wallet, true),
+        AccountMeta::new_readonly(*community_token_dto_pubkey, false),
+        AccountMeta::new_readonly(*sol_deposit_authority, true),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::DaoStrategyDepositSolWithReferrer(amount)
             .try_to_vec()
             .unwrap(),
     }
@@ -2149,6 +2331,31 @@ pub fn create_community_token_staking_rewards_counter(
     }
 }
 
+/// Creates instruction required to create account for 
+/// storing counter metrics of deposit sol transactions with referrer
+pub fn create_metrics_deposit_referrer_counter(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    metrics_deposit_referrer_counter_dto: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*metrics_deposit_referrer_counter_dto, false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::CreateMetricsDepositReferrerCounter
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
 /// Creates instructions required to deposit SOL directly into a stake pool.
 pub fn mint_community_token(
     program_id: &Pubkey,
@@ -2244,6 +2451,108 @@ pub fn merge_inactive_stake(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::MergeInactiveStake
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Instruction for removal of flushed metrics accounts
+/// Please use it carefully, accounts should be remoed in adequate chunks
+pub fn remove_metrics_deposit_referrer(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    metrics_deposit_referrer_counter: &Pubkey,
+    metrics_deposit_referrer_keys: Vec<Pubkey>,
+) -> Instruction {
+    let mut accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*metrics_deposit_referrer_counter, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    
+    for metrics_deposit_referrer_key in metrics_deposit_referrer_keys {
+        accounts.push(AccountMeta::new(metrics_deposit_referrer_key, false))
+    }
+    
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::RemoveMetricsDepositReferrer
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Create a list for storing stake pool's referrers
+pub fn create_referrer_list(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    referrer_list: &Pubkey,
+    max_referrers: u32,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*referrer_list, false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ]; 
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::CreateReferrerList(max_referrers)
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Add a referrer to the list of stake pool's referrers
+pub fn add_referrer(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    referrer_list: &Pubkey,
+    referrer: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*referrer_list, false),
+        AccountMeta::new_readonly(*referrer, false),        
+    ]; 
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::AddReferrer
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Remove a referrer from the stake pool's referrers
+pub fn remove_referrer(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    referrer_list: &Pubkey,
+    referrer: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new(*referrer_list, false),
+        AccountMeta::new_readonly(*referrer, false),
+    ];
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::RemoveReferrer
             .try_to_vec()
             .unwrap(),
     }

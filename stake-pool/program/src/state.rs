@@ -31,6 +31,8 @@ pub enum AccountType {
     StakePool,
     /// Validator stake list
     ValidatorList,
+    /// Referrer list
+    ReferrerList,
 }
 
 impl Default for AccountType {
@@ -164,12 +166,17 @@ pub struct StakePool {
 
     /// Total liquidity in Sol equivalent under management.
     pub total_lamports_liquidity: u64,
+
+    /// Numerator for the Fix APY feature based on the 
+    pub max_validator_yield_per_epoch_numerator: u32,
 }
 impl StakePool {
     /// 0.060144% - numerator of validator yield per epoch for validator 8% APY with 128 epochs in year.
-    const VALIDATOR_YIELD_PER_EPOCH_NUMERATOR: u64 = 60144;
+    pub const DEFAULT_VALIDATOR_YIELD_PER_EPOCH_NUMERATOR: u32 = 60144;
+    /// Default number of epochs per year
+    pub const DEFAULT_EPOCHS_PER_YEAR: u32 = 128;
     /// 0.060144% - denominator of validator yield per epoch for validator 8% APY with 128 epochs in year.
-    const VALIDATOR_YIELD_PER_EPOCH_DENOMINATOR: u64 = 100_000_000;
+    pub const VALIDATOR_YIELD_PER_EPOCH_DENOMINATOR: u32 = 100_000_000;
 
     /// calculate the pool tokens that should be minted from lamports
     #[inline]
@@ -243,6 +250,18 @@ impl StakePool {
     /// calculate pool tokens to be deducted from SOL deposit fees as referral fees
     #[inline]
     pub fn calc_pool_tokens_sol_referral_fee(&self, sol_deposit_fee: u64) -> Option<u64> {
+        u64::try_from(
+            (sol_deposit_fee as u128)
+                .checked_mul(self.sol_referral_fee as u128)?
+                .checked_div(100u128)?,
+        )
+        .ok()
+    }
+
+    /// calculate SOL to be deducted from SOL deposit as referral fees
+    #[inline]
+    pub fn calc_sol_referral_fee(&self, deposit_lamports: u64) -> Option<u64> {
+        let sol_deposit_fee = self.sol_deposit_fee.apply(deposit_lamports)?;
         u64::try_from(
             (sol_deposit_fee as u128)
                 .checked_mul(self.sol_referral_fee as u128)?
@@ -513,13 +532,155 @@ impl StakePool {
 
     /// Calculates the amount of SOL that the user would have paid before applying the APY retention strategy. 
     /// From this amount, you need to take DepositFee, if it is installed.
-    pub fn calculate_deposit_amount_by_reward_simulation(amount: u64) -> Option<u64> {
+    pub fn calculate_deposit_amount_by_reward_simulation(&self, amount: u64) -> Option<u64> {
+        let numerator = if self.max_validator_yield_per_epoch_numerator == 0 {
+            Self::DEFAULT_VALIDATOR_YIELD_PER_EPOCH_NUMERATOR
+        } else {
+            self.max_validator_yield_per_epoch_numerator
+        };
         u64::try_from(
             (amount as u128)
-                .checked_mul((Self::VALIDATOR_YIELD_PER_EPOCH_DENOMINATOR - Self::VALIDATOR_YIELD_PER_EPOCH_NUMERATOR) as u128)?
+                .checked_mul((Self::VALIDATOR_YIELD_PER_EPOCH_DENOMINATOR - numerator) as u128)?
                 .checked_div(Self::VALIDATOR_YIELD_PER_EPOCH_DENOMINATOR as u128)?,
 
         ).ok()
+    }
+}
+
+/// Referrer type
+#[repr(C)]
+#[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct Referrer {
+    /// Referrer's public key
+    pub key: Pubkey,
+}
+
+impl Referrer {
+    /// Create an instance of the Refferer structure
+    pub fn new(key: Pubkey) -> Self {
+        Self { key }
+    }
+
+    /// Performs a very cheap comparison, for checking if this referrer pubkey
+    /// matches the provided pubkey
+    pub fn memcmp_pubkey(data: &[u8], referrer_address_bytes: &[u8]) -> bool {
+        sol_memcmp(
+            &data[0..0 + PUBKEY_BYTES],
+            referrer_address_bytes,
+            PUBKEY_BYTES,
+        ) == 0
+    }
+
+    /// Check whether the provided Referrer is not default
+    pub fn is_not_default(data: &[u8]) -> bool {
+        sol_memcmp(
+            &data[0..0 + PUBKEY_BYTES],
+            Pubkey::default().as_ref(),
+            PUBKEY_BYTES,
+        ) != 0        
+    }
+}
+
+impl Sealed for Referrer {}
+
+impl Pack for Referrer {
+    const LEN: usize = 32;
+    fn pack_into_slice(&self, data: &mut [u8]) {
+        let mut data = data;
+        self.serialize(&mut data).unwrap();
+    }
+    fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
+        let unpacked = Self::try_from_slice(src)?;
+        Ok(unpacked)
+    }
+}
+
+/// Storage list for all referrals in the pool.
+#[repr(C)]
+#[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct ReferrerList {
+    /// Data outside of the referrer list, separated out for cheaper deserializations
+    pub header: ReferrerListHeader,
+
+    /// List of referrers in the pool
+    pub referrers: Vec<Referrer>,
+}
+
+/// Helper type to deserialize just the start of a ValidatorList
+#[repr(C)]
+#[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct ReferrerListHeader {
+    /// Account type, must be ReferrerList currently
+    pub account_type: AccountType,
+
+    /// Maximum allowable number of referrers
+    pub max_referrers: u32,
+}
+
+impl ReferrerList {
+    const SEED_PREFIX: &'static [u8] = b"referrer_list";
+
+    /// Create an empty instance containing space for `max_validators` and preferred validator keys
+    pub fn new(max_referrers: u32) -> Self {
+        Self {
+            header: ReferrerListHeader {
+                account_type: AccountType::ReferrerList,
+                max_referrers,
+            },
+            referrers: vec![Referrer::default(); max_referrers as usize],
+        }
+    }
+
+    /// Check if contains referrer with particular pubkey
+    pub fn contains(&self, referrer_address: &Pubkey) -> bool {
+        self.referrers
+            .iter()
+            .any(|x| x.key == *referrer_address)
+    }
+}
+
+impl SimplePda for ReferrerList {
+    fn get_seed_prefix() -> &'static [u8] {
+        return Self::SEED_PREFIX;
+    }
+}
+
+impl ReferrerListHeader {
+    #[allow(dead_code)]
+    const LEN: usize = 1 + 4;
+
+    /// Check if referrer list is actually initialized as a referrer list
+    pub fn is_valid(&self) -> bool {
+        self.account_type == AccountType::ReferrerList
+    }
+
+    /// Check if referrer list is uninitialized
+    pub fn is_uninitialized(&self) -> bool {
+        self.account_type == AccountType::Uninitialized
+    }
+
+    /// Extracts a slice of Pubkey from the vec part
+    /// of the ReferrerList
+    pub fn deserialize_mut_slice(
+        data: &mut [u8],
+        skip: usize,
+        len: usize,
+    ) -> Result<(Self, Vec<&mut Referrer>), ProgramError> {
+        let (header, mut big_vec) = Self::deserialize_vec(data)?;
+        let referrer_list = big_vec.deserialize_mut_slice::<Referrer>(skip, len)?;
+        Ok((header, referrer_list))
+    }
+
+    /// Extracts the referrer list into its header and internal BigVec
+    pub fn deserialize_vec(data: &mut [u8]) -> Result<(Self, BigVec), ProgramError> {
+        let mut data_mut = &data[..];
+        let header = ReferrerListHeader::deserialize(&mut data_mut)?;
+        let length = get_instance_packed_len(&header)?;
+
+        let big_vec = BigVec {
+            data: &mut data[length..],
+        };
+        Ok((header, big_vec))
     }
 }
 
@@ -943,12 +1104,15 @@ impl SimplePda for DaoState {
 }
 
 /// Account type. Needed to find from the network. Quantity of variants must be less than or equal 256. (1 byte)
+/// Please do not change the order of this enum without essential needs and understanding consequenses
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
 pub enum NetworkAccountType {
     /// If the account has not been initialized, the enum will be 0
     Uninitialized,
     /// Account for CommunityTokenStakingRewards dto
-    CommunityTokenStakingRewards
+    CommunityTokenStakingRewards,
+    /// Account for MetricDepositReferrer dto
+    MetricsDepositRefferer,
 }
 
 /// Stores the number of minted tokens for each category.
@@ -1192,16 +1356,205 @@ pub struct AccountGroup {
     value: u64
 }
 impl AccountGroup {
-        /// Constructor
-        pub fn new(value: u64) -> Self {
-            return Self {
-                value
-            }
+    /// Constructor
+    pub fn new(value: u64) -> Self {
+        return Self {
+            value
         }
+    }
 
     /// Value getter
     pub fn get_value(&self) -> u64 {
         return self.value;
+    }
+}
+
+/// Stores information that allows to request accounts for storing CommunityTokenStakingRewards 
+/// structure from the network in parts.
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct MetricsDepositReferrerCounter {
+    /// value for determaning concrete group of account
+    account_group: AccountGroup,
+    /// value for determaning account quantity in the one group
+    counter_for_group: u16,
+    /// how many groups flushed
+    flushed_group: AccountGroup,
+    /// how many accounts flushed in the last flushed group
+    flushed_counter: u16,
+}
+
+impl MetricsDepositReferrerCounter {
+    /// Maximum quantity of account for requesting from the network at one time
+    pub const MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP: u8 = 100;
+    /// Seed prefix for PDA
+    const SEED_PREFIX: &'static [u8] = b"metrics_deposit_referrer_counter";
+    /// Initial value for account group
+    pub const ACCOUNT_GROUP_INITIAL_VALUE: u64 = 1;
+
+    /// Constructor
+    pub fn new() -> Self {
+        return Self {
+            account_group: AccountGroup::new(Self::ACCOUNT_GROUP_INITIAL_VALUE),
+            counter_for_group: 0,
+            flushed_group: AccountGroup::new(Self::ACCOUNT_GROUP_INITIAL_VALUE),
+            flushed_counter: 0,
+        }
+    }
+
+    /// Get calculated account group
+    pub fn calculate_account_group(&mut self) -> AccountGroup {
+        if (self.counter_for_group + 1) > (Self::MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP as u16) {
+            self.account_group = AccountGroup::new(self.account_group.value + 1);
+            self.counter_for_group = 1;
+        } else {
+            self.counter_for_group = self.counter_for_group + 1;
+        }
+
+        return self.account_group.clone();
+    }
+
+    /// Get calculated flushed account group
+    pub fn increase_flushed_counter(&mut self) {
+        if self.flushed_counter >= Self::MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP as u16 {
+            self.flushed_group = AccountGroup::new(self.flushed_group.value + 1);
+            self.flushed_counter = 1;
+        } else {
+            self.flushed_counter = self.flushed_counter + 1;
+        }
+    }
+
+    /// account_group getter
+    pub fn get_account(&self) -> &AccountGroup {
+        &self.account_group
+    }
+
+    /// account_group getter
+    pub fn get_flushed_group(&self) -> &AccountGroup {
+        &self.flushed_group
+    }    
+
+    /// counter_for_group getter
+    pub fn get_counter(&self) -> u16 {
+        self.counter_for_group
+    }
+
+    /// flushed_counter getter
+    pub fn get_flushed_counter(&self) -> u16 {
+        self.flushed_counter
+    }
+
+    /// Get the total number of accounts
+    pub fn get_number_of_accounts(&self) -> u64 {
+        self.get_counter() as u64 + self
+            .get_account()
+            .get_value()
+            .checked_sub(1)
+            .map_or(0, |num| num * Self::MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP as u64)
+    }
+
+    /// Get id by index
+    pub fn get_id_by_indexes(group_index: u64, account_index: u16) -> u64 {
+        account_index as u64 + group_index
+            .checked_sub(1)
+            .map_or(0, |num| num * Self::MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP as u64)
+    }   
+
+    /// Get the total number of flushed accounts
+    pub fn get_number_of_flushed_accounts(&self) -> u64 {
+        self.get_flushed_counter() as u64 + self
+            .get_flushed_group()
+            .get_value()
+            .checked_sub(1)
+            .map_or(0, |num| num * Self::MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP as u64)
+    }
+
+    /// let's record how many accounts flushed
+    pub fn flush(&mut self) {
+        self.flushed_group = self.account_group.clone();
+        self.flushed_counter = self.counter_for_group;
+    }
+}
+
+impl SimplePda for MetricsDepositReferrerCounter {
+    fn get_seed_prefix() -> &'static [u8] {
+        return Self::SEED_PREFIX;
+    }
+}
+
+/// Metrics for DepositSolWithReferrer instruction.
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
+pub struct MetricsDepositReferrer {
+    /// Account type. Needed to find from the network
+    network_account_type: NetworkAccountType,
+    /// Value for determaning concrete group of account
+    account_group: AccountGroup,
+    /// Programm id. Needed to find from the network
+    program_id: Pubkey,
+    /// Stake pool address. Needed to find from the network
+    stake_pool_address: Pubkey,
+    /// Epoch
+    pub epoch: u64,
+    /// Transaction timestamp
+    pub timestamp: i64,
+    /// From
+    pub from: Pubkey,
+    /// Referrer
+    pub referrer: Pubkey,
+    /// Number of lamports
+    pub amount: u64,
+}
+
+impl MetricsDepositReferrer {
+    /// Seed prefix for PDA
+    pub const SEED_PREFIX: &'static [u8] = b"metric_deposit_referrer";
+    /// Find PDA 
+    pub fn find_address(
+        program_id: &Pubkey,
+        stake_pool_address: &Pubkey,
+        id: u64,
+    ) -> (Pubkey, u8) {
+        Pubkey::find_program_address(
+            &[
+                Self::SEED_PREFIX,
+                &stake_pool_address.to_bytes()[..],
+                id.to_string().as_bytes(),
+                &program_id.to_bytes()[..],
+            ],
+            program_id
+        )
+    }
+
+    /// Constructor
+    pub fn new(
+        metrics_deposit_referrer_counter: &mut MetricsDepositReferrerCounter,
+        network_account_type: NetworkAccountType,
+        program_id: Pubkey,
+        stake_pool_address: Pubkey,
+        epoch: u64,
+        timestamp: i64,
+        from: Pubkey,
+        referrer: Pubkey,
+        amount: u64,
+    ) -> Self {
+        return Self {
+            network_account_type,
+            account_group: metrics_deposit_referrer_counter.calculate_account_group(),
+            program_id,
+            stake_pool_address,
+            epoch,
+            timestamp,
+            from,
+            referrer,
+            amount,
+        }
+    }
+}
+
+impl SimplePda for MetricsDepositReferrer {
+    fn get_seed_prefix() -> &'static [u8] {
+        return Self::SEED_PREFIX;
     }
 }
 

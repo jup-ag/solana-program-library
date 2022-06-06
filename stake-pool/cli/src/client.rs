@@ -10,7 +10,7 @@ use {
     solana_program::{borsh::try_from_slice_unchecked, program_pack::Pack, pubkey::Pubkey, stake},
     spl_stake_pool::{
         find_withdraw_authority_program_address,
-        state::{StakePool, ValidatorList, SimplePda, DaoState, CommunityToken, CommunityTokenStakingRewardsCounter, CommunityTokensCounter},
+        state::{StakePool, ValidatorList, SimplePda, DaoState, CommunityToken, CommunityTokenStakingRewardsCounter, CommunityTokensCounter, ReferrerList, MetricsDepositReferrerCounter},
     },
     std::collections::HashSet,
     borsh::BorshDeserialize,
@@ -34,6 +34,8 @@ impl StakePoolDtoOffChain for CommunityTokensCounter {}
 impl StakePoolDtoOffChain for CommunityToken {}
 impl StakePoolDtoOffChain for CommunityTokenStakingRewardsCounter {}
 impl StakePoolDtoOffChain for DaoState {}
+impl StakePoolDtoOffChain for ReferrerList {}
+impl StakePoolDtoOffChain for MetricsDepositReferrerCounter {}
 
 pub fn get_stake_pool(
     rpc_client: &RpcClient,
@@ -98,7 +100,7 @@ pub(crate) fn get_stake_state(
 
 pub(crate) fn get_stake_pools(
     rpc_client: &RpcClient,
-) -> Result<Vec<(Pubkey, StakePool, ValidatorList, Pubkey)>, ClientError> {
+) -> Result<Vec<(Pubkey, StakePool, ValidatorList, Pubkey, ReferrerList, Pubkey)>, ClientError> {
     rpc_client
         .get_program_accounts_with_config(
             &spl_stake_pool::id(),
@@ -121,11 +123,14 @@ pub(crate) fn get_stake_pools(
                 .filter_map(|(address, account)| {
                     let pool_withdraw_authority =
                         find_withdraw_authority_program_address(&spl_stake_pool::id(), &address).0;
+                    let referrer_list_storage_account =
+                        ReferrerList::find_address(&spl_stake_pool::id(), &address).0;
                     match try_from_slice_unchecked::<StakePool>(account.data.as_slice()) {
                         Ok(stake_pool) => {
+                            let referrer_list = ReferrerList::get(rpc_client, &address).unwrap_or_default();
                             get_validator_list(rpc_client, &stake_pool.validator_list)
                                 .map(|validator_list| {
-                                    (address, stake_pool, validator_list, pool_withdraw_authority)
+                                    (address, stake_pool, validator_list, pool_withdraw_authority, referrer_list, referrer_list_storage_account)
                                 })
                                 .ok()
                         }

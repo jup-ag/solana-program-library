@@ -3,12 +3,14 @@ use {
     solana_cli_output::{QuietDisplay, VerboseDisplay},
     solana_sdk::native_token::Sol,
     solana_sdk::{pubkey::Pubkey, stake::state::Lockup},
-    spl_stake_pool::state::{Fee, StakePool, StakeStatus, ValidatorList, ValidatorStakeInfo},
+    spl_stake_pool::state::{Fee, StakePool, StakeStatus, ValidatorList, ValidatorStakeInfo, ReferrerList, Referrer, MetricsDepositReferrerCounter},
     std::fmt::{Display, Formatter, Result, Write},
-    super::{ ValidatorsInfo, ValidatorsDataVec, ValidatorsData,
+    super::{ ValidatorsInfo, ValidatorsDataVec, ValidatorsData, 
+        MetricsDepositReferrerInfoVec, MetricsDepositReferrerInfo, MetricsDepositReferrerCounterInfo,
         VALIDATOR_MAXIMUM_FEE, VALIDATOR_MAXIMUM_SKIPPED_SLOTS, VALIDATOR_MINIMUM_APY, VALIDATOR_MINIMUM_TOTAL_ACTIVE_STAKE,
         VALIDATORS_OFFSET, VALIDATORS_QUANTITY, VALIDATORS_QUERY_SIZE,
-    }
+    },
+    chrono::prelude::*,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -76,6 +78,10 @@ pub(crate) struct CliStakePool {
     pub last_epoch_total_lamports: u64,
     pub treasury_fee_account: String,
     pub treasury_fee: CliStakePoolFee,
+    pub referrer_list: Vec<CliStakePoolReferrer>,
+    pub referrer_list_storage_account: String,
+    pub max_referrers: u32,
+    pub max_validator_yield_per_epoch_numerator: u32,
     pub details: Option<CliStakePoolDetails>,
 }
 
@@ -89,6 +95,11 @@ impl VerboseDisplay for CliStakePool {
             w,
             "Validator List: {}",
             &self.validator_list_storage_account
+        )?;
+        writeln!(
+            w,
+            "Referrer List: {}",
+            &self.referrer_list_storage_account
         )?;
         writeln!(w, "Manager: {}", &self.manager)?;
         writeln!(w, "Staker: {}", &self.staker)?;
@@ -174,10 +185,23 @@ impl VerboseDisplay for CliStakePool {
             &self.sol_referral_fee
         )?;           
         writeln!(w, "Treasury Fee: {} of epoch rewards", &self.treasury_fee)?;
+        writeln!(w, "Max validator yield per epoch (numerator): {}", self.max_validator_yield_per_epoch_numerator)?;
+
         match &self.details {
             None => {}
             Some(details) => {
                 VerboseDisplay::write_str(details, w)?;
+            }
+        }
+        writeln!(w)?;
+        writeln!(w, "Max number of referrers: {}", self.max_referrers)?;
+        writeln!(w, "Current number of referrers: {}", self.referrer_list.len())?;
+        if self.referrer_list.len() > 0 {
+            writeln!(w)?;
+            writeln!(w, "Referrers")?;
+            writeln!(w, "--------------")?;
+            for referrer in &self.referrer_list {
+                writeln!(w, "{}", referrer.referrer_address)?;
             }
         }
         Ok(())
@@ -191,6 +215,11 @@ impl Display for CliStakePool {
             f,
             "Validator List: {}",
             &self.validator_list_storage_account
+        )?;
+        writeln!(
+            f,
+            "Referrer List: {}",
+            &self.referrer_list_storage_account
         )?;
         writeln!(f, "Pool Token Mint: {}", &self.pool_mint)?;
         match &self.preferred_deposit_validator_vote_address {
@@ -292,6 +321,7 @@ pub(crate) struct CliStakePoolDetails {
     pub current_number_of_validators: u32,
     pub max_number_of_validators: u32,
     pub update_required: bool,
+    pub metrics_deposit_referrer_counter: Option<MetricsDepositReferrerCounterInfo>,
     pub dao_details: Option<CliDaoDetails>,
 }
 
@@ -393,6 +423,12 @@ impl VerboseDisplay for CliStakePoolDetails {
             &self.max_number_of_validators,
         )?;
 
+        if let Some(m) = &self.metrics_deposit_referrer_counter {
+            writeln!(w, "{}", m)?;
+        } else {
+            writeln!(w, "No metrics counter for Referrer deposits found")?;
+        }
+        
         writeln!(w)?;
         writeln!(w, "DAO Info")?;
         writeln!(w, "--------------")?;
@@ -506,9 +542,17 @@ impl From<Fee> for CliStakePoolFee {
     }
 }
 
-impl From<(Pubkey, StakePool, ValidatorList, Pubkey)> for CliStakePool {
-    fn from(s: (Pubkey, StakePool, ValidatorList, Pubkey)) -> Self {
-        let (address, stake_pool, validator_list, pool_withdraw_authority) = s;
+impl From<(Pubkey, StakePool, ValidatorList, Pubkey, ReferrerList, Pubkey)> for CliStakePool {
+    fn from(s: (Pubkey, StakePool, ValidatorList, Pubkey, ReferrerList, Pubkey)) -> Self {
+        let (
+            address,
+            stake_pool,
+            validator_list,
+            pool_withdraw_authority,
+            referrer_list,
+            referrer_list_storage_account,
+        ) = s;
+        
         Self {
             address: address.to_string(),
             pool_withdraw_authority: pool_withdraw_authority.to_string(),
@@ -557,6 +601,14 @@ impl From<(Pubkey, StakePool, ValidatorList, Pubkey)> for CliStakePool {
             last_epoch_total_lamports: stake_pool.last_epoch_total_lamports,
             treasury_fee_account: stake_pool.treasury_fee_account.to_string(),
             treasury_fee: CliStakePoolFee::from(stake_pool.treasury_fee),
+            referrer_list: referrer_list
+                .referrers
+                .into_iter()
+                .map(CliStakePoolReferrer::from)
+                .collect(),
+            referrer_list_storage_account: referrer_list_storage_account.to_string(),
+            max_referrers: referrer_list.header.max_referrers,
+            max_validator_yield_per_epoch_numerator: stake_pool.max_validator_yield_per_epoch_numerator,
             details: None,
         }
     }
@@ -645,6 +697,81 @@ impl Display for ValidatorsInfo {
         writeln!(f, "{}", self.potential_validators)?;
         writeln!(f, "{}", self.validators_to_be_added)?;
         writeln!(f, "{}", self.validators_to_be_removed)?;
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CliStakePoolReferrer {
+    pub referrer_address: String,
+}
+
+impl From<Referrer> for CliStakePoolReferrer {
+    fn from(r: Referrer) -> Self {
+        Self {
+            referrer_address: r.key.to_string(),
+        }
+    }
+}
+
+impl Display for MetricsDepositReferrerInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let nt = NaiveDateTime::from_timestamp(self.timestamp, 0);
+        let dt: DateTime<Utc> = DateTime::from_utc(nt, Utc);
+        let datetime = dt.format("%Y-%m-%d %H:%M:%S");
+
+        writeln!(f, "{}. Epoch: {} Timestamp: {} Referrer: {} From: {} Amount: {}", self.id, self.epoch, datetime, self.referrer, self.from, self.amount)?;
+        Ok(())
+    }
+}
+
+impl VerboseDisplay for MetricsDepositReferrerInfoVec {
+    fn write_str(&self, w: &mut dyn Write) -> Result {
+        for metrics in &self.metrics_buffer {
+            write!(w, "{}", metrics)?;
+        }
+        Ok(())        
+    }
+}
+impl QuietDisplay for MetricsDepositReferrerInfoVec {}
+impl Display for MetricsDepositReferrerInfoVec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        for metrics in &self.metrics_buffer {
+            write!(f, "{}", metrics)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<MetricsDepositReferrerCounter> for MetricsDepositReferrerCounterInfo {
+    fn from(mc: MetricsDepositReferrerCounter) -> Self {
+        Self {
+            max_accounts_in_group: MetricsDepositReferrerCounter::MAX_QUANTITY_OF_ACCOUNTS_IN_GROUP,
+            group_initial_index: MetricsDepositReferrerCounter::ACCOUNT_GROUP_INITIAL_VALUE,
+            group_index: mc.get_account().get_value(),
+            account_index: mc.get_counter(),
+            total_accounts: mc.get_number_of_accounts(),
+            flushed_group_index: mc.get_flushed_group().get_value(),
+            flushed_account_index: mc.get_flushed_counter(),
+            total_flushed_accounts: mc.get_number_of_flushed_accounts(),
+        }
+    }
+}
+
+impl Display for MetricsDepositReferrerCounterInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        writeln!(f)?;
+        writeln!(f, "Referrer deposits counter")?;
+        writeln!(f, "-------------------------")?;
+        writeln!(f, "group initial index: {}", self.group_initial_index)?;
+        writeln!(f, "max_accounts_in_group: {}", self.max_accounts_in_group)?;
+        writeln!(f, "total accounts: {}", self.total_accounts)?;
+        writeln!(f, "total flushed accounts: {}", self.total_flushed_accounts)?;
+        writeln!(f, "group index: {}", self.group_index)?;
+        writeln!(f, "account index: {}", self.account_index)?;
+        writeln!(f, "flushed group index: {}", self.flushed_group_index)?;
+        writeln!(f, "flushed account index: {}", self.flushed_account_index)?;
         Ok(())
     }
 }

@@ -9,7 +9,8 @@ use {
         state::{
             AccountType, Fee, FeeType, RateOfExchange, StakePool, StakeStatus, ValidatorList,
             ValidatorListHeader, ValidatorStakeInfo, SimplePda, CommunityToken, DaoState, CommunityTokenStakingRewards, 
-            NetworkAccountType, CommunityTokenStakingRewardsCounter, CommunityTokensCounter,
+            NetworkAccountType, CommunityTokenStakingRewardsCounter, CommunityTokensCounter, 
+            ReferrerList, ReferrerListHeader, Referrer, MetricsDepositReferrer, MetricsDepositReferrerCounter,
         },
         AUTHORITY_DEPOSIT, AUTHORITY_WITHDRAW, MINIMUM_ACTIVE_STAKE, TRANSIENT_STAKE_SEED_PREFIX,
     },
@@ -788,6 +789,7 @@ impl Processor {
         stake_pool.treasury_fee_account = *treasury_fee_info.key;
         stake_pool.treasury_fee = treasury_fee;
         stake_pool.total_lamports_liquidity = 0;
+        stake_pool.max_validator_yield_per_epoch_numerator = StakePool::DEFAULT_VALIDATOR_YIELD_PER_EPOCH_NUMERATOR;
 
         let pool_tokens_minted = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(total_lamports)
@@ -1771,6 +1773,7 @@ impl Processor {
     fn process_update_stake_pool_balance(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
+        max_validator_yield_per_epoch_numerator: u32,
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
@@ -1909,6 +1912,7 @@ impl Processor {
                 })
             };
 
+            stake_pool.max_validator_yield_per_epoch_numerator = max_validator_yield_per_epoch_numerator;
             stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
         }
 
@@ -2102,18 +2106,15 @@ impl Processor {
 
         let new_pool_tokens = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(
-                StakePool::calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
-                .ok_or(StakePoolError::CalculationFailure)?
+                stake_pool.calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
+                    .ok_or(StakePoolError::CalculationFailure)?
             )
             .ok_or(StakePoolError::CalculationFailure)?;
         let new_pool_tokens_from_stake = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(
-                StakePool::calculate_deposit_amount_by_reward_simulation(stake_deposit_lamports)
-                .ok_or(StakePoolError::CalculationFailure)?
-            )
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
-        let new_pool_tokens_from_sol = new_pool_tokens
-            .checked_sub(new_pool_tokens_from_stake)
+        let new_pool_tokens_from_sol = stake_pool
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(sol_deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         let stake_deposit_fee = stake_pool
@@ -2130,6 +2131,10 @@ impl Processor {
             .checked_sub(total_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
+        // we don't support the default referral program
+        let pool_tokens_referral_fee = 0;
+        let pool_tokens_manager_deposit_fee = total_fee;
+/*
         let pool_tokens_referral_fee = stake_pool
             .calc_pool_tokens_stake_referral_fee(total_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
@@ -2137,7 +2142,7 @@ impl Processor {
         let pool_tokens_manager_deposit_fee = total_fee
             .checked_sub(pool_tokens_referral_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
-
+*/
         if pool_tokens_user
             .saturating_add(pool_tokens_manager_deposit_fee)
             .saturating_add(pool_tokens_referral_fee)
@@ -2274,11 +2279,10 @@ impl Processor {
             return Err(StakePoolError::DepositTooSmall.into());
         }
 
-        let new_pool_tokens = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(
-                StakePool::calculate_deposit_amount_by_reward_simulation(deposit_lamports)
-                .ok_or(StakePoolError::CalculationFailure)?
-            )
+        let new_pool_tokens_wo_idle_fee = stake_pool
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let new_pool_tokens = stake_pool.calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         if new_pool_tokens == 0 {
@@ -2286,19 +2290,23 @@ impl Processor {
         }
 
         let pool_tokens_sol_deposit_fee = stake_pool
-            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens)
+            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
         let pool_tokens_user = new_pool_tokens
             .checked_sub(pool_tokens_sol_deposit_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
+        // we don't support the default referral program
+        let pool_tokens_referral_fee = 0;
+        let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee;
+/*            
         let pool_tokens_referral_fee = stake_pool
             .calc_pool_tokens_sol_referral_fee(pool_tokens_sol_deposit_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
         let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee
             .checked_sub(pool_tokens_referral_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
-
+*/
         if pool_tokens_user
             .saturating_add(pool_tokens_manager_deposit_fee)
             .saturating_add(pool_tokens_referral_fee)
@@ -3423,11 +3431,10 @@ impl Processor {
         community_token_staking_rewards.set_last_rewarded_epoch(epoch);
         community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
-        let new_pool_tokens = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(
-                StakePool::calculate_deposit_amount_by_reward_simulation(deposit_lamports)
-                .ok_or(StakePoolError::CalculationFailure)?
-            )
+        let new_pool_tokens_wo_idle_fee = stake_pool
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let new_pool_tokens = stake_pool.calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         if new_pool_tokens == 0 {
@@ -3435,18 +3442,23 @@ impl Processor {
         }
 
         let pool_tokens_sol_deposit_fee = stake_pool
-            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens)
+            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
         let pool_tokens_user = new_pool_tokens
             .checked_sub(pool_tokens_sol_deposit_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
+        // we don't support the default referral program
+        let pool_tokens_referral_fee = 0;
+        let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee;
+/*            
         let pool_tokens_referral_fee = stake_pool
             .calc_pool_tokens_sol_referral_fee(pool_tokens_sol_deposit_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
         let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee
             .checked_sub(pool_tokens_referral_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
+*/
 
         if pool_tokens_user
             .saturating_add(pool_tokens_manager_deposit_fee)
@@ -3513,6 +3525,280 @@ impl Processor {
             .checked_add(deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
         stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// Makes a deposit of a user sol in the StakePull reserve stake account, giving back 
+    /// the number of tokens calculated according to a specific strategy. 
+    /// Сhecks that there is an account required for dao strategy and changes the data on this account.
+    /// Pays the referral fee to a whitelisted referral and collect the metrics
+    /// 
+    /// Processes [DaoStrategyDepositSolWithReferrer](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_dao_strategy_deposit_sol_with_referrer(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        deposit_lamports: u64,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let reserve_stake_account_info = next_account_info(account_info_iter)?;
+        let from_user_lamports_info = next_account_info(account_info_iter)?;
+        let dest_user_pool_info = next_account_info(account_info_iter)?;
+        let dao_community_tokens_to_info = next_account_info(account_info_iter)?;
+        let manager_fee_info = next_account_info(account_info_iter)?;
+        let referrer_fee_info = next_account_info(account_info_iter)?;
+        let referrer_list_dto_info = next_account_info(account_info_iter)?;
+        let metrics_deposit_referrer_dto_info = next_account_info(account_info_iter)?;
+        let metrics_deposit_referrer_counter_dto_info = next_account_info(account_info_iter)?;
+        let pool_mint_info = next_account_info(account_info_iter)?;
+        let system_program_info = next_account_info(account_info_iter)?;
+        let rent_info = next_account_info(account_info_iter)?;
+        let token_program_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
+        let owner_wallet_info = next_account_info(account_info_iter)?;
+        let community_token_dto_info = next_account_info(account_info_iter)?;
+        let sol_deposit_authority_info = next_account_info(account_info_iter);
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        let epoch = Clock::get()?.epoch;
+        if stake_pool.last_update_epoch < epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+        stake_pool.check_authority_withdraw(
+            withdraw_authority_info.key,
+            program_id,
+            stake_pool_info.key,
+        )?;
+        stake_pool.check_sol_deposit_authority(sol_deposit_authority_info)?;
+        stake_pool.check_mint(pool_mint_info)?;
+        stake_pool.check_reserve_stake(reserve_stake_account_info)?;
+        stake_pool.check_manager_fee(manager_fee_info)?;
+
+        check_account_owner(referrer_list_dto_info, program_id)?;
+        let mut referrer_list_data = referrer_list_dto_info.data.borrow_mut();
+        let (header, referrer_list) =
+            ReferrerListHeader::deserialize_vec(&mut referrer_list_data)?;
+        if !header.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        if referrer_list.find::<Referrer>(referrer_fee_info.key.as_ref(), Referrer::memcmp_pubkey).is_none() {
+            return Err(StakePoolError::ReferrerNotFound.into());
+        }
+        if *referrer_fee_info.key == *owner_wallet_info.key {
+            return Err(ProgramError::InvalidArgument);
+        }
+        if stake_pool.token_program_id != *token_program_info.key {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+        check_system_program(system_program_info.key)?;
+
+        if !owner_wallet_info.is_signer {
+            return Err(StakePoolError::SignatureMissing.into());
+        }
+        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_staking_rewards_dto_info.data_is_empty()
+            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if community_token_dto_info.data_is_empty()
+            || community_token_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+
+        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if dao_community_tokens_to_info.data_is_empty()
+            || dao_community_tokens_to_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+        if deposit_lamports < MINIMUM_DEPOSIT {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+        let metrics_deposit_referrer_counter_pubkey = MetricsDepositReferrerCounter::find_address(program_id, stake_pool_info.key).0;
+        if metrics_deposit_referrer_counter_pubkey != *metrics_deposit_referrer_counter_dto_info.key {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if metrics_deposit_referrer_counter_dto_info.data_is_empty()
+            || metrics_deposit_referrer_counter_dto_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+        check_account_owner(metrics_deposit_referrer_counter_dto_info, program_id)?;
+        let mut metrics_deposit_referrer_counter = try_from_slice_unchecked::<MetricsDepositReferrerCounter>(&metrics_deposit_referrer_counter_dto_info.data.borrow())?;
+
+        let timestamp = Clock::get()?.unix_timestamp;
+        let (metrics_deposit_referrer_pubkey, metrics_bump_seed) = MetricsDepositReferrer::find_address(
+            program_id,
+            stake_pool_info.key,
+            metrics_deposit_referrer_counter.get_number_of_accounts(),
+        );
+        if metrics_deposit_referrer_pubkey != *metrics_deposit_referrer_dto_info.key {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if !metrics_deposit_referrer_dto_info.data_is_empty()
+            || metrics_deposit_referrer_dto_info.lamports() != 0 {
+            return Err(StakePoolError::DataAlreadyExists.into());
+        }
+        check_account_owner(metrics_deposit_referrer_counter_dto_info, program_id)?;        
+
+        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        community_token_staking_rewards.set_initial_staking_epoch(epoch);
+        community_token_staking_rewards.set_last_rewarded_epoch(epoch);
+        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+
+        let new_pool_tokens_wo_idle_fee = stake_pool
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let new_pool_tokens = stake_pool.calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        if new_pool_tokens == 0 {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
+        let pool_tokens_sol_deposit_fee = stake_pool
+            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_wo_idle_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let pool_tokens_user = new_pool_tokens
+            .checked_sub(pool_tokens_sol_deposit_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let pool_tokens_referral_fee = stake_pool
+            .calc_pool_tokens_sol_referral_fee(pool_tokens_sol_deposit_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee
+            .checked_sub(pool_tokens_referral_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        if pool_tokens_user
+            .saturating_add(pool_tokens_manager_deposit_fee)
+            .saturating_add(pool_tokens_referral_fee)
+            != new_pool_tokens
+        {
+            return Err(StakePoolError::CalculationFailure.into());
+        }
+
+        if pool_tokens_user == 0 {
+            return Err(StakePoolError::DepositTooSmall.into());
+        }
+
+        // deduct the referral fee tokens from new_pool_tokens as we burn them
+        let new_pool_tokens = new_pool_tokens
+            .checked_sub(pool_tokens_referral_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        // we pay the referral fee in lamports
+        let sol_referral_fee = stake_pool
+            .calc_sol_referral_fee(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        // this instruction shouldn't be used without referral fee
+        if sol_referral_fee == 0 {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        // deduct the sol referral fee from the deposit lamports
+        let deposit_lamports = deposit_lamports
+            .checked_sub(sol_referral_fee)
+            .ok_or(StakePoolError::CalculationFailure)?;
+
+        Self::sol_transfer(
+            from_user_lamports_info.clone(),
+            referrer_fee_info.clone(),
+            system_program_info.clone(),
+            sol_referral_fee,
+        )?;
+
+        Self::sol_transfer(
+            from_user_lamports_info.clone(),
+            reserve_stake_account_info.clone(),
+            system_program_info.clone(),
+            deposit_lamports,
+        )?;
+
+        Self::token_mint_to(
+            stake_pool_info.key,
+            token_program_info.clone(),
+            pool_mint_info.clone(),
+            dest_user_pool_info.clone(),
+            withdraw_authority_info.clone(),
+            AUTHORITY_WITHDRAW,
+            stake_pool.stake_withdraw_bump_seed,
+            pool_tokens_user,
+        )?;
+
+        if pool_tokens_manager_deposit_fee > 0 {
+            Self::token_mint_to(
+                stake_pool_info.key,
+                token_program_info.clone(),
+                pool_mint_info.clone(),
+                manager_fee_info.clone(),
+                withdraw_authority_info.clone(),
+                AUTHORITY_WITHDRAW,
+                stake_pool.stake_withdraw_bump_seed,
+                pool_tokens_manager_deposit_fee,
+            )?;
+        }
+
+        stake_pool.pool_token_supply = stake_pool
+            .pool_token_supply
+            .checked_add(new_pool_tokens)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.total_lamports = stake_pool
+            .total_lamports
+            .checked_add(deposit_lamports)
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+
+        // write metrics
+        let id_str = metrics_deposit_referrer_counter.get_number_of_accounts().to_string();
+        let metrics_account_signer_seeds: &[&[_]] = &[
+            MetricsDepositReferrer::get_seed_prefix(),
+            &stake_pool_info.key.to_bytes()[..32],
+            id_str.as_bytes(),
+            &program_id.to_bytes()[..32],
+            &[metrics_bump_seed],
+        ];
+
+        let rent = &Rent::from_account_info(rent_info)?;
+        let metrics_deposit_referrer = MetricsDepositReferrer::new(
+            &mut metrics_deposit_referrer_counter,
+            NetworkAccountType::MetricsDepositRefferer,
+            program_id.clone(),
+            stake_pool_info.key.clone(),
+            epoch,
+            timestamp,
+            *owner_wallet_info.key,
+            *referrer_fee_info.key,
+            deposit_lamports.checked_add(sol_referral_fee).ok_or(StakePoolError::CalculationFailure)?,
+        );  
+        let space = get_instance_packed_len(&metrics_deposit_referrer)?;      
+
+        create_pda_account(
+            owner_wallet_info,
+            rent.minimum_balance(space),
+            space,
+            program_id,
+            system_program_info,
+            metrics_deposit_referrer_dto_info,
+            metrics_account_signer_seeds,
+        )?;
+        metrics_deposit_referrer.serialize(&mut *metrics_deposit_referrer_dto_info.data.borrow_mut())?;
+        metrics_deposit_referrer_counter.serialize(&mut *metrics_deposit_referrer_counter_dto_info.data.borrow_mut())?;
 
         Ok(())
     }
@@ -4207,21 +4493,18 @@ impl Processor {
         let sol_deposit_lamports = total_deposit_lamports
             .checked_sub(stake_deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
-
+  
         let new_pool_tokens = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(
-                StakePool::calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
-                .ok_or(StakePoolError::CalculationFailure)?
+                stake_pool.calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
+                    .ok_or(StakePoolError::CalculationFailure)?
             )
             .ok_or(StakePoolError::CalculationFailure)?;
         let new_pool_tokens_from_stake = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(
-                StakePool::calculate_deposit_amount_by_reward_simulation(stake_deposit_lamports)
-                .ok_or(StakePoolError::CalculationFailure)?
-            )
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
-        let new_pool_tokens_from_sol = new_pool_tokens
-            .checked_sub(new_pool_tokens_from_stake)
+        let new_pool_tokens_from_sol = stake_pool
+            .convert_amount_of_lamports_to_amount_of_pool_tokens(sol_deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         let stake_deposit_fee = stake_pool
@@ -4238,6 +4521,10 @@ impl Processor {
             .checked_sub(total_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
+        // we don't support the default referral program
+        let pool_tokens_referral_fee = 0;
+        let pool_tokens_manager_deposit_fee = total_fee;
+/*
         let pool_tokens_referral_fee = stake_pool
             .calc_pool_tokens_stake_referral_fee(total_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
@@ -4245,7 +4532,7 @@ impl Processor {
         let pool_tokens_manager_deposit_fee = total_fee
             .checked_sub(pool_tokens_referral_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
-
+*/
         if pool_tokens_user
             .saturating_add(pool_tokens_manager_deposit_fee)
             .saturating_add(pool_tokens_referral_fee)
@@ -4630,6 +4917,302 @@ impl Processor {
         )?;
 
         Ok(())
+    }        
+
+    /// Creates a list of stake pool's referrers
+    /// Сan only be performed by the StakePool manager.
+    /// 
+    /// Processes [CreateReferrerList](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_create_referrer_list(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        max_referrers: u32,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let referrer_list_dto_info = next_account_info(account_info_iter)?;
+        let rent_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        let (referrer_list_pubkey, bump_seed) = ReferrerList::find_address(program_id, stake_pool_info.key);
+        if *referrer_list_dto_info.key != referrer_list_pubkey {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+        if !referrer_list_dto_info.data_is_empty() 
+            || referrer_list_dto_info.lamports() != 0 {
+            return Err(StakePoolError::AlreadyInUse.into());
+        }
+        let mut referrer_list = ReferrerList::new(max_referrers);  
+        let rent = &Rent::from_account_info(rent_info)?;
+        let space = get_instance_packed_len(&referrer_list)?;
+
+        invoke_signed(
+            &system_instruction::create_account(
+                manager_info.key,
+                referrer_list_dto_info.key,
+                rent.minimum_balance(space),
+                space as u64,
+                program_id,
+            ),
+            &[
+                manager_info.clone(),
+                referrer_list_dto_info.clone()
+            ],
+            &[
+                &[
+                    ReferrerList::get_seed_prefix(),
+                    &stake_pool_info.key.to_bytes()[..],
+                    &program_id.to_bytes()[..],
+                    &[bump_seed],
+                ]
+            ]
+        )?;
+
+        referrer_list.referrers.clear();
+        referrer_list.serialize(&mut *referrer_list_dto_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// Add a referrer to the list of stake pool's referrers
+    /// Сan only be performed by the StakePool manager.
+    /// 
+    /// Processes [AddReferrer](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_add_referrer(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let referrer_list_dto_info = next_account_info(account_info_iter)?;
+        let referrer_dto_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        let (referrer_list_pubkey, _) = ReferrerList::find_address(program_id, stake_pool_info.key);
+        if *referrer_list_dto_info.key != referrer_list_pubkey {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        check_account_owner(referrer_list_dto_info, program_id)?;
+
+        let mut referrer_list_data = referrer_list_dto_info.data.borrow_mut();
+        let (header, mut referrer_list) =
+            ReferrerListHeader::deserialize_vec(&mut referrer_list_data)?;
+        if !header.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        if header.max_referrers == referrer_list.len() {
+            return Err(ProgramError::AccountDataTooSmall);
+        }
+
+        let referrer = Referrer::new(*referrer_dto_info.key);
+        if referrer_list.find::<Referrer>(referrer.key.as_ref(), Referrer::memcmp_pubkey).is_some() {
+            return Err(StakePoolError::ReferrerAlreadyAdded.into());
+        }
+        referrer_list.push(referrer)?;
+
+        Ok(())
+    }
+
+    /// Add a referrer to the list of stake pool's referrers
+    /// Сan only be performed by the StakePool manager.
+    /// 
+    /// Processes [AddReferrer](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_remove_referrer(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let referrer_list_dto_info = next_account_info(account_info_iter)?;
+        let referrer_dto_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        let (referrer_list_pubkey, _) = ReferrerList::find_address(program_id, stake_pool_info.key);
+        if *referrer_list_dto_info.key != referrer_list_pubkey {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        check_account_owner(referrer_list_dto_info, program_id)?;
+
+        let mut referrer_list_data = referrer_list_dto_info.data.borrow_mut();
+        let (header, mut referrer_list) =
+            ReferrerListHeader::deserialize_vec(&mut referrer_list_data)?;
+        if !header.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+
+        let referrer = Referrer::new(*referrer_dto_info.key);
+        let found = referrer_list.find_mut::<Referrer>(
+                referrer.key.as_ref(),
+                Referrer::memcmp_pubkey,
+            )
+            .ok_or(StakePoolError::ReferrerNotFound)?;
+        found.key = Pubkey::default();
+        referrer_list.retain::<Referrer>(Referrer::is_not_default)?;
+
+        Ok(())
+    }
+
+    /// Create account for storing MetricsDepositReferrerCounter structure.
+    /// Сan only be performed by the StakePool manager.
+    /// 
+    /// Processes [CreateMetricsDepositReferrerCounter](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_create_metrics_deposit_referrer_counter(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let metrics_deposit_referrer_counter_dto_info = next_account_info(account_info_iter)?;
+        let rent_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        if stake_pool.last_update_epoch < Clock::get()?.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        let (metrics_deposit_referrer_counter_pubkey, bump_seed) = <MetricsDepositReferrerCounter>::find_address(program_id, stake_pool_info.key);
+        if *metrics_deposit_referrer_counter_dto_info.key != metrics_deposit_referrer_counter_pubkey {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        if !metrics_deposit_referrer_counter_dto_info.data_is_empty() 
+            || metrics_deposit_referrer_counter_dto_info.lamports() != 0 {
+            return Err(StakePoolError::DataAlreadyExists.into());
+        }
+
+        let rent = &Rent::from_account_info(rent_info)?;
+
+        let metrics_deposit_referrer_counter = MetricsDepositReferrerCounter::new();
+
+        let space = get_instance_packed_len(&metrics_deposit_referrer_counter)?;
+
+        invoke_signed(
+            &system_instruction::create_account(
+                manager_info.key,
+                metrics_deposit_referrer_counter_dto_info.key,
+                rent.minimum_balance(space),
+                space as u64,
+                program_id,
+            ),
+            &[
+                manager_info.clone(),
+                metrics_deposit_referrer_counter_dto_info.clone()
+            ],
+            &[
+                &[
+                    MetricsDepositReferrerCounter::get_seed_prefix(),
+                    &stake_pool_info.key.to_bytes()[..],
+                    &program_id.to_bytes()[..],
+                    &[bump_seed],
+                ]
+            ]
+        )?;
+
+        metrics_deposit_referrer_counter.serialize(&mut *metrics_deposit_referrer_counter_dto_info.data.borrow_mut())?;
+
+        Ok(())
+    }
+
+    /// Remove metrics accounts that flushed and not needed anymore
+    /// Сan only be performed by the StakePool manager.
+    /// 
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_remove_metrics_deposit_referrer(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {        
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let metrics_counter_info = next_account_info(account_info_iter)?;
+        let _system_program = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        if *metrics_counter_info.key != MetricsDepositReferrerCounter::find_address(program_id, stake_pool_info.key).0 {
+            return Err(StakePoolError::InvalidPdaAddress.into());
+        }
+
+        if metrics_counter_info.data_is_empty() 
+            || metrics_counter_info.lamports() == 0 {
+            return Err(StakePoolError::DataDoesNotExist.into());
+        }
+
+        let mut metrics_counter = try_from_slice_unchecked::<MetricsDepositReferrerCounter>(&metrics_counter_info.data.borrow())?;
+
+        while let Ok(metrics_account) = next_account_info(account_info_iter) {
+            let metrics_account_pubkey = MetricsDepositReferrer::find_address(
+                program_id, 
+                stake_pool_info.key,
+                metrics_counter.get_number_of_flushed_accounts(),
+            ).0;
+
+            if *metrics_account.key != metrics_account_pubkey {
+                return Err(StakePoolError::InvalidPdaAddress.into());
+            } 
+
+            let dest_starting_lamports = manager_info.lamports();
+            **manager_info.lamports.borrow_mut() = dest_starting_lamports
+                .checked_add(metrics_account.lamports())
+                .unwrap();
+            **metrics_account.lamports.borrow_mut() = 0;
+            
+            let mut metrics_account_data = metrics_account.data.borrow_mut();
+            metrics_account_data.fill(0);
+
+            metrics_counter.increase_flushed_counter();
+        }
+        metrics_counter.serialize(&mut *metrics_counter_info.data.borrow_mut())?;
+
+        Ok(())
     }
 
     /// Router-processor for methods.
@@ -4714,9 +5297,9 @@ impl Processor {
                     no_merge,
                 )
             }
-            StakePoolInstruction::UpdateStakePoolBalance => {
+            StakePoolInstruction::UpdateStakePoolBalance(max_validator_yield_per_epoch_numerator) => {
                 msg!("Instruction: UpdateStakePoolBalance");
-                Self::process_update_stake_pool_balance(program_id, accounts)
+                Self::process_update_stake_pool_balance(program_id, accounts, max_validator_yield_per_epoch_numerator)
             }
             StakePoolInstruction::CleanupRemovedValidatorEntries => {
                 msg!("Instruction: CleanupRemovedValidatorEntries");
@@ -4817,6 +5400,30 @@ impl Processor {
                 msg!("Instruction: MergeInactiveStake");
                 Self::process_merge_inactive_stake(program_id, accounts)
             }
+            StakePoolInstruction::CreateReferrerList(max_referrers) =>  {
+                msg!("Instruction: CreateReferrerList");
+                Self::process_create_referrer_list(program_id, accounts, max_referrers)
+            }
+            StakePoolInstruction::AddReferrer =>  {
+                msg!("Instruction: AddReferrer");
+                Self::process_add_referrer(program_id, accounts)
+            }
+            StakePoolInstruction::RemoveReferrer =>  {
+                msg!("Instruction: RemoveReferrer");
+                Self::process_remove_referrer(program_id, accounts)
+            }
+            StakePoolInstruction::DaoStrategyDepositSolWithReferrer(lamports) => {
+                msg!("Instruction: DaoStrategyDepositSolWithReferrer");
+                Self::process_dao_strategy_deposit_sol_with_referrer(program_id, accounts, lamports)
+            }
+            StakePoolInstruction::CreateMetricsDepositReferrerCounter => {
+                msg!("Instruction: CreateMetricsDepositReferrerCounter");
+                Self::process_create_metrics_deposit_referrer_counter(program_id, accounts)
+            } 
+            StakePoolInstruction::RemoveMetricsDepositReferrer => {
+                msg!("Instruction: RemoveMetricsDepositReferrer");
+                Self::process_remove_metrics_deposit_referrer(program_id, accounts)
+            }             
         }
     }
 }
@@ -4872,6 +5479,8 @@ impl PrintProgramError for StakePoolError {
             StakePoolError::InvalidEpoch => msg!("Error: Invalid epoch."),
             StakePoolError::InvalidTreasuryFeeAccount => msg!("Error: Invalid treasury fee account"),
             StakePoolError::NonZeroTokenBalance => msg!("Error: Non zero token balance"),
+            StakePoolError::ReferrerAlreadyAdded => msg!("Error: this referrer already exists in the referrer list"),
+            StakePoolError::ReferrerNotFound => msg!("Error: this referrer not found in the referrer list"),
         }
     }
 }
