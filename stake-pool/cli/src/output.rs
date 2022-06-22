@@ -715,13 +715,24 @@ impl From<Referrer> for CliStakePoolReferrer {
     }
 }
 
+impl VerboseDisplay for MetricsDepositReferrerInfo {
+    fn write_str(&self, w: &mut dyn Write) -> Result {
+        let nt = NaiveDateTime::from_timestamp(self.timestamp, 0);
+        let dt: DateTime<Utc> = DateTime::from_utc(nt, Utc);
+        let datetime = dt.format("%Y-%m-%d %H:%M:%S");
+
+        writeln!(w, "{}. Epoch: {} Timestamp: {} Referrer: {} From: {} Amount: {}", self.id, self.epoch, datetime, self.referrer, self.from, self.amount)?;
+        Ok(())       
+    }  
+}
+
 impl Display for MetricsDepositReferrerInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let nt = NaiveDateTime::from_timestamp(self.timestamp, 0);
         let dt: DateTime<Utc> = DateTime::from_utc(nt, Utc);
         let datetime = dt.format("%Y-%m-%d %H:%M:%S");
 
-        writeln!(f, "{}. Epoch: {} Timestamp: {} Referrer: {} From: {} Amount: {}", self.id, self.epoch, datetime, self.referrer, self.from, self.amount)?;
+        writeln!(f, "{},{},{},{},{},{}", self.id, self.epoch, datetime, self.referrer, self.from, self.amount)?;
         Ok(())
     }
 }
@@ -729,7 +740,7 @@ impl Display for MetricsDepositReferrerInfo {
 impl VerboseDisplay for MetricsDepositReferrerInfoVec {
     fn write_str(&self, w: &mut dyn Write) -> Result {
         for metrics in &self.metrics_buffer {
-            write!(w, "{}", metrics)?;
+            VerboseDisplay::write_str(metrics, w)?;
         }
         Ok(())        
     }
@@ -737,6 +748,7 @@ impl VerboseDisplay for MetricsDepositReferrerInfoVec {
 impl QuietDisplay for MetricsDepositReferrerInfoVec {}
 impl Display for MetricsDepositReferrerInfoVec {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        writeln!(f, "Id,Epoch,Timestamp,Referrer,From,Amount")?;
         for metrics in &self.metrics_buffer {
             write!(f, "{}", metrics)?;
         }

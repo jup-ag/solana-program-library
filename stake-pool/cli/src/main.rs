@@ -60,6 +60,7 @@ use {
     std::str::FromStr,
     std::{process::exit, sync::Arc},
     std::cell::RefCell,
+    chrono::{DateTime, NaiveDateTime, Utc, Datelike},
 };
 
 // use instruction::create_associated_token_account once ATA 1.0.5 is released
@@ -516,6 +517,19 @@ impl MetricsDepositReferrerInfoVec {
         })
     }
 
+    pub fn filter_by_last_month(&mut self) {
+        let current_month = chrono::offset::Utc::now().month();
+
+        assert!(current_month >= 1 && current_month <= 12);
+        let previous_month = if current_month == 1 { 12 } else { current_month.checked_sub(1).unwrap() };
+
+        self.metrics_buffer.retain(|m| {
+            let nt = NaiveDateTime::from_timestamp(m.timestamp, 0);
+            let dt: DateTime<Utc> = DateTime::from_utc(nt, Utc);            
+            dt.month() == previous_month
+        });
+    }
+
     pub fn fetch(&mut self, config: &Config, stake_pool_address: &Pubkey) -> Result<(), Error> {
         let metrics_counter = MetricsDepositReferrerCounter::get(&config.rpc_client, stake_pool_address)?;
         
@@ -647,9 +661,13 @@ impl MetricsDepositReferrerInfoVec {
     }
 }
 
-fn command_show_metrics_deposit_referrer(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
+fn command_show_metrics_deposit_referrer(config: &Config, stake_pool_address: &Pubkey, last_month: bool) -> CommandResult {
     let mut referrer_metrics_info_vec = MetricsDepositReferrerInfoVec::new()?;
     referrer_metrics_info_vec.fetch(config, stake_pool_address)?;
+    if last_month {
+        referrer_metrics_info_vec.filter_by_last_month();
+    }
+
     println!("{}", config.output_format.formatted_string(&referrer_metrics_info_vec));
 
     Ok(())
@@ -6058,7 +6076,7 @@ fn main() {
             )
         )
         .subcommand(SubCommand::with_name("show-metrics-deposit-referrer")
-            .about("Show metrics of deposit sol with referrer transactions")
+            .about("Show metrics of deposit sol with referrer transactions in csv format by default")
             .arg(
                 Arg::with_name("pool")
                     .index(1)
@@ -6067,6 +6085,13 @@ fn main() {
                     .takes_value(true)
                     .required(true)
                     .help("Stake pool address"),
+            )
+            .arg(
+                Arg::with_name("last-month")
+                    .long("last-month")
+                    .takes_value(false)
+                    .help("Show metrics for last month only"),
+
             )
         )
         .subcommand(SubCommand::with_name("flush-metrics-deposit-referrer")
@@ -6629,7 +6654,8 @@ fn main() {
         }
         ("show-metrics-deposit-referrer", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
-            command_show_metrics_deposit_referrer(&config, &stake_pool_address)
+            let last_month = arg_matches.is_present("last-month");
+            command_show_metrics_deposit_referrer(&config, &stake_pool_address, last_month)
         }
         ("flush-metrics-deposit-referrer", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
