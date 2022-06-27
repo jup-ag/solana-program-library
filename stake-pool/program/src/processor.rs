@@ -4467,8 +4467,13 @@ impl Processor {
         let mut post_all_validator_lamports = dest_stake_account_info.lamports();
 
         if is_just_deactivation {
+            // add the stake excluding reward simulation
+            // the reward simulation will be added next epoch since the stake will not have worked for 2 epochs
             post_all_validator_lamports = post_all_validator_lamports
-                .checked_add(stake_info.lamports())
+                .checked_add(
+                    stake_pool.calculate_deposit_amount_by_reward_simulation(stake_info.lamports())
+                        .ok_or(StakePoolError::CalculationFailure)?
+                )
                 .ok_or(StakePoolError::CalculationFailure)?;
         }
 
@@ -4487,12 +4492,18 @@ impl Processor {
             return Err(StakePoolError::DepositTooSmall.into());
         }
 
-        let stake_deposit_lamports = post_stake
+        let mut stake_deposit_lamports = post_stake
             .checked_sub(pre_stake)
             .ok_or(StakePoolError::CalculationFailure)?;
-        let sol_deposit_lamports = total_deposit_lamports
+
+        let mut sol_deposit_lamports = total_deposit_lamports
             .checked_sub(stake_deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
+
+        if is_just_deactivation {
+            stake_deposit_lamports = stake_info.lamports();
+            sol_deposit_lamports = 0;
+        }
   
         let new_pool_tokens = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(
@@ -4890,7 +4901,7 @@ impl Processor {
         check_stake_program(stake_program_info.key)?;
         check_account_owner(stake_pool_info, program_id)?;
 
-        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
@@ -4915,6 +4926,20 @@ impl Processor {
             stake_history_info.clone(),
             stake_program_info.clone(),
         )?;
+
+        // inactive stake pays simulation reward during the merge
+        stake_pool.total_lamports = stake_pool
+            .total_lamports
+            .checked_add(
+                stake_info.lamports()
+                    .checked_sub(
+                        stake_pool.calculate_deposit_amount_by_reward_simulation(stake_info.lamports())
+                            .ok_or(StakePoolError::CalculationFailure)?
+                    )
+                    .ok_or(StakePoolError::CalculationFailure)?
+            )
+            .ok_or(StakePoolError::CalculationFailure)?;
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
 
         Ok(())
     }        

@@ -607,7 +607,7 @@ pub enum StakePoolInstruction {
     DeleteCommunityTokenStakingRewards,
 
     ///   Merge inactive stake accounts with the pool's reserve account
-    ///   0. `[]` Stake pool
+    ///   0. `[w]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[]` Stake pool withdraw authority
     ///   3. `[w]` Pool's inactive stake account
@@ -2437,7 +2437,7 @@ pub fn merge_inactive_stake(
     reserve_stake_account: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
-        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new(*stake_pool, false),
         AccountMeta::new_readonly(*manager, true),
         AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
         AccountMeta::new(*stake, false),
