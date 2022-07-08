@@ -1,0 +1,38 @@
+version: '3'
+services:
+  eversol_client:
+    build:
+      context: .
+      dockerfile: eversol_client/Dockerfile
+    env_file:
+      - keys/keys.env
+    depends_on:
+      eversol_validator:
+        condition: service_healthy
+    healthcheck:
+      test: bash /scripts/healthcheck.sh
+      interval: 1s
+      timeout: 30s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - ./keys:/keys
+      - ./eversol_client/scripts:/scripts
+    command: bash /scripts/eversol_client_init.sh
+
+  eversol_validator:
+    build:
+      context: .
+      dockerfile: eversol_validator/Dockerfile
+    env_file:
+      - keys/keys.env
+    healthcheck:
+      test: bash /scripts/healthcheck.sh
+      interval: 15s
+      timeout: 30s
+      retries: 10
+      start_period: 1m
+    volumes:
+      - ./keys:/keys
+      - ./eversol_validator/scripts:/scripts
+    command: bash /scripts/eversol_validator_init.sh

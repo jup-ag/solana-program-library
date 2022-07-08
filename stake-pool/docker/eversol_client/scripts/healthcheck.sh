@@ -1,0 +1,1 @@
+spl-stake-pool --version || exit 1

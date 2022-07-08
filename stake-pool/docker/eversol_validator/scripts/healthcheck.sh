@@ -1,0 +1,1 @@
+solana account $(solana address -k $STAKE_POOL_PROGRAM_KEY) || exit 1
