@@ -20,6 +20,7 @@ num_enum = "0.5.4"
 serde = "1.0.130"
 serde_derive = "1.0.103"
 solana-program = "1.9.5"
+mpl-token-metadata = { version="1", features = [ "no-entrypoint" ] }
 spl-math = { version = "0.1", path = "../../libraries/math", features = [ "no-entrypoint" ] }
 spl-token = { version = "3.3", path = "../../token/program", features = [ "no-entrypoint" ] }
 spl-token-2022 = { version = "0.2", path = "../../token/program-2022", features = ["no-entrypoint"] }

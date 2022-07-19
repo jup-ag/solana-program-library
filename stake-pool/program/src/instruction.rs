@@ -688,6 +688,27 @@ pub enum StakePoolInstruction {
     ///   5.. `[w]` (Optional) Metrics accounts
     /// 
     RemoveMetricsDepositReferrer,
+
+    ///   Update or Create token metadata
+    /// 
+    ///   0. `[]` Stake pool
+    ///   1. `[s]` Manager
+    ///   2. `[]` Mint (withdraw) authority (Community token or Pool token mint authority)
+    ///   3. `[]` Token mint (Community token or Pool token mint)
+    ///   4. `[]` Rent sysvar
+    ///   5. `[]` System program account
+    /// 
+    UpdateTokenMetadata {
+        #[allow(dead_code)] // but it's not
+        /// token name
+        name: String,
+        #[allow(dead_code)] // but it's not
+        /// token symbol
+        symbol: String,
+        /// token metadata uri
+        #[allow(dead_code)] // but it's not
+        uri: String,
+    },    
 }
 
 /// Creates an 'initialize' instruction.
@@ -2553,6 +2574,42 @@ pub fn remove_referrer(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::RemoveReferrer
+            .try_to_vec()
+            .unwrap(),
+    }
+}
+
+/// Update or create pool or community token metadata
+pub fn update_token_metadata(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    stake_pool_withdraw_authority: &Pubkey,
+    token_mint: &Pubkey,
+    metadata_key: &Pubkey,
+    name: &str,
+    symbol: &str,
+    uri: &str,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+        AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
+        AccountMeta::new_readonly(*token_mint, false),
+        AccountMeta::new(*metadata_key, false),
+        AccountMeta::new_readonly(system_program::ID, false), 
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
+        AccountMeta::new_readonly(mpl_token_metadata::id(), false),
+    ];
+
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::UpdateTokenMetadata { 
+            name: name.to_string(),
+            symbol: symbol.to_string(),
+            uri: uri.to_string() 
+        }
             .try_to_vec()
             .unwrap(),
     }

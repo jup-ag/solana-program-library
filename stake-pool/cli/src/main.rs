@@ -42,6 +42,7 @@ use {
         signers::Signers,
         system_instruction,
         transaction::Transaction,
+        compute_budget::ComputeBudgetInstruction,
     },
     spl_associated_token_account::get_associated_token_address,
     spl_stake_pool::state::StakeStatus,
@@ -2549,6 +2550,66 @@ fn calculate_max_validator_yield_per_epoch_numerator() -> u32 {
         }
     }
     max_validator_yield_per_epoch_numerator
+}
+
+fn command_update_token_metadata(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    name: &str,
+    symbol: &str,
+    uri: &str,
+    is_community_token: bool,
+) -> CommandResult {
+    let _stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+
+    let pool_withdraw_authority =
+        find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;    
+    let _stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?; 
+
+    let target_mint = if is_community_token {
+        let community_token = CommunityToken::get(&config.rpc_client, stake_pool_address)?;
+        community_token.token_mint
+    } else {
+        _stake_pool.pool_mint
+    };
+
+    let metadata_key = mpl_token_metadata::pda::find_metadata_account(&target_mint).0;
+
+    let instruction = spl_stake_pool::instruction::update_token_metadata(
+        &spl_stake_pool::id(),
+        stake_pool_address,
+        &config.manager.pubkey(),
+        &pool_withdraw_authority,
+        &target_mint,
+        &metadata_key,
+        name,
+        symbol,
+        uri,
+    );
+
+    let recent_blockhash = get_latest_blockhash(&config.rpc_client)?;
+    let message = Message::new_with_blockhash(
+        &[ 
+            instruction
+        ],
+        Some(&config.fee_payer.pubkey()),
+        &recent_blockhash,
+    );
+
+    check_fee_payer_balance(
+        config,
+        config.rpc_client.get_fee_for_message(&message)?,
+    )?;
+
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        config.manager.as_ref(),
+    ];
+    unique_signers!(signers);
+
+    send_transaction(config, Transaction::new(&signers, message, recent_blockhash))?;
+
+    Ok(())
 }
 
 fn command_update(
@@ -6106,6 +6167,50 @@ fn main() {
                     .help("Stake pool address"),
             )
         )
+        .subcommand(SubCommand::with_name("update-token-metadata")
+            .about("Update or Create metadata for the pool or community token")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address"),
+            )
+            .arg(
+                Arg::with_name("name")
+                    .index(2)
+                    .value_name("name")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Token name"),
+            )
+            .arg(
+                Arg::with_name("symbol")
+                    .index(3)
+                    .value_name("symbol")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Token symbol"),
+            )
+            .arg(
+                Arg::with_name("uri")
+                    .index(4)
+                    .value_name("uri")
+                    .validator(is_url)
+                    .takes_value(true)
+                    .required(true)
+                    .help("Token metadata uri"),
+            )
+            .arg(
+                        Arg::with_name("community-token")
+                            .long("community-token")
+                            .takes_value(false)
+                            .help("Change metadata of community token since pool token changes by default"),
+        
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -6661,6 +6766,14 @@ fn main() {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             command_flush_metrics_deposit_referrer(&config, &stake_pool_address)
         }
+        ("update-token-metadata", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let name = arg_matches.value_of("name").unwrap();
+            let symbol = arg_matches.value_of("symbol").unwrap();
+            let uri = arg_matches.value_of("uri").unwrap();
+            let is_community_token = arg_matches.is_present("community-token");
+            command_update_token_metadata(&config, &stake_pool_address, name, symbol, uri, is_community_token)
+        }     
         _ => unreachable!(),
     }
     .map_err(|err| {

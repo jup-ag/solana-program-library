@@ -5240,6 +5240,124 @@ impl Processor {
         Ok(())
     }
 
+    
+    /// Update or create pool token or community token metadata
+    /// Сan only be performed by the StakePool manager.
+    /// 
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_update_token_metadata(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        name: String,
+        symbol: String,
+        uri: String,
+    ) -> ProgramResult {        
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let withdraw_authority_info = next_account_info(account_info_iter)?;
+        let token_mint_info = next_account_info(account_info_iter)?;
+        let metadata_account_info = next_account_info(account_info_iter)?;
+        let system_program_info = next_account_info(account_info_iter)?;
+        let rent_info = next_account_info(account_info_iter)?;
+        let mpl_program_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+
+        let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        let (withdraw_authority_key, withdraw_authority_bump) =
+            crate::find_withdraw_authority_program_address(program_id, stake_pool_info.key);
+        if withdraw_authority_key != *withdraw_authority_info.key {
+            msg!(
+                "Incorrect withdraw authority provided, expected {}, received {}",
+                withdraw_authority_key,
+                withdraw_authority_info.key
+            );
+            return Err(StakePoolError::InvalidProgramAddress.into());
+        }
+
+        let token_mint = Mint::unpack_from_slice(&token_mint_info.data.borrow())?;
+
+        if !token_mint.mint_authority.contains(&withdraw_authority_key) {
+            return Err(StakePoolError::WrongMintingAuthority.into());
+        }
+
+        let metadata_key = mpl_token_metadata::pda::find_metadata_account(token_mint_info.key).0;
+
+        if *metadata_account_info.key != metadata_key {
+            return Err(StakePoolError::InvalidProgramAddress.into());
+        }
+
+
+        let (inst, accs) = if metadata_account_info.data_is_empty() {
+            (mpl_token_metadata::instruction::create_metadata_accounts_v2(
+                mpl_token_metadata::id(), 
+                metadata_key, 
+                *token_mint_info.key, 
+                withdraw_authority_key, 
+                *manager_info.key, 
+                withdraw_authority_key, 
+                name,
+                symbol,
+                uri,
+                None, 
+                0,
+                true, 
+                true,
+                None,
+                None,
+            ), [
+                metadata_account_info.clone(),
+                token_mint_info.clone(),
+                withdraw_authority_info.clone(),
+                manager_info.clone(),
+                withdraw_authority_info.clone(),
+                system_program_info.clone(),
+                rent_info.clone(),
+                mpl_program_info.clone(),
+            ].to_vec()
+            )
+        } else {
+            (mpl_token_metadata::instruction::update_metadata_accounts_v2(
+                mpl_token_metadata::id(), 
+                metadata_key, 
+                withdraw_authority_key, 
+                None, 
+                Some(mpl_token_metadata::state::DataV2 {
+                    name,
+                    symbol,
+                    uri,
+                    seller_fee_basis_points: 0,
+                    creators: None,
+                    collection: None,
+                    uses: None,
+                }), 
+                None,
+                None
+            ), [
+                metadata_account_info.clone(),
+                withdraw_authority_info.clone(),
+            ].to_vec())
+        };
+
+        let me_bytes = stake_pool_info.key.to_bytes();
+        let authority_signature_seeds = [&me_bytes[..32], AUTHORITY_WITHDRAW, &[withdraw_authority_bump]];
+        let signers = &[&authority_signature_seeds[..]];
+
+        invoke_signed(
+            &inst, 
+            &accs,
+            signers,
+        )?;
+
+        Ok(())
+    }
+
     /// Router-processor for methods.
     /// 
     /// Processes [Instruction](enum.Instruction.html).
@@ -5448,7 +5566,11 @@ impl Processor {
             StakePoolInstruction::RemoveMetricsDepositReferrer => {
                 msg!("Instruction: RemoveMetricsDepositReferrer");
                 Self::process_remove_metrics_deposit_referrer(program_id, accounts)
-            }             
+            }  
+            StakePoolInstruction::UpdateTokenMetadata { name, symbol, uri } => {
+                msg!("Instruction: UpdateTokenMetadata");
+                Self::process_update_token_metadata(program_id, accounts, name, symbol, uri)
+            }            
         }
     }
 }
