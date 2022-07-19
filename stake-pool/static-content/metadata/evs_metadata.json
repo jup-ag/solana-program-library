@@ -2,5 +2,5 @@
   "name": "Eversol governance token",
   "symbol": "EVS",
   "description": "EVS token provides Eversol delegators with voting power and let them play the key role in the distribution of Treasury funds",
-  "image": "https://user-images.githubusercontent.com/109520521/179513390-eb24a1cf-3044-41e7-9534-9719285fca96.jpg"
+  "image": "https://raw.githubusercontent.com/everstake/solana-program-library/master/stake-pool/static-content/images/evs_token.png"
 }
