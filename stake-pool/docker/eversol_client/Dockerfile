@@ -4,7 +4,7 @@ LABEL one.eversol.solana eversol solana container based on solana-cli v1.10.28
 COPY common/scripts/install_tools.sh /install_tools.sh
 RUN bash /install_tools.sh
 
-ENV PATH=/solana/bin:$PATH
+ENV PATH=$HOME/.local/share/solana/install/active_release/bin/solana:/solana/bin:$PATH
 COPY keys/stake_pool_program.json /root/stake_pool_program.json
 
 # Uncomment the following line to update eversol client
