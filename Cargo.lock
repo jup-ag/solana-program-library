@@ -1787,6 +1787,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "mpl-token-metadata"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe5e23f9f14cbd35ab82c471e7a024f617a8f65b0468fa2c8c7eb4def7ebaa18"
+dependencies = [
+ "arrayref",
+ "borsh",
+ "mpl-token-vault",
+ "num-derive",
+ "num-traits",
+ "solana-program",
+ "spl-associated-token-account 1.0.3",
+ "spl-token 3.2.0",
+ "thiserror",
+]
+
+[[package]]
+name = "mpl-token-vault"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ade4ef15bc06a6033076c4ff28cba9b42521df5ec61211d6f419415ace2746a"
+dependencies = [
+ "borsh",
+ "num-derive",
+ "num-traits",
+ "solana-program",
+ "spl-token 3.2.0",
+ "thiserror",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3952,6 +3983,7 @@ dependencies = [
  "arrayref",
  "bincode",
  "borsh",
+ "mpl-token-metadata",
  "num-derive",
  "num-traits",
  "num_enum",
@@ -3980,6 +4012,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "mpl-token-metadata",
  "reqwest",
  "serde",
  "serde_derive",
