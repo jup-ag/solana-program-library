@@ -3037,6 +3037,8 @@ impl Processor {
         let rent_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(dao_state_dto_info, program_id)?;
+
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -3117,6 +3119,8 @@ impl Processor {
         let rent_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(community_token_dto_info, program_id)?;
+
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -3264,6 +3268,8 @@ impl Processor {
         let rent_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(community_token_staking_rewards_counter_dto_info, program_id)?;
+
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -3368,6 +3374,9 @@ impl Processor {
         let sol_deposit_authority_info = next_account_info(account_info_iter);
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(community_token_staking_rewards_dto_info, program_id)?;
+        check_account_owner(community_token_dto_info, program_id)?;
+
         let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -3563,6 +3572,10 @@ impl Processor {
         let sol_deposit_authority_info = next_account_info(account_info_iter);
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(metrics_deposit_referrer_counter_dto_info, program_id)?;
+        check_account_owner(community_token_staking_rewards_dto_info, program_id)?;
+        check_account_owner(community_token_dto_info, program_id)?;
+
         let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -3834,6 +3847,9 @@ impl Processor {
         let sol_withdraw_authority_info = next_account_info(account_info_iter);
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(community_token_staking_rewards_dto_info, program_id)?;
+        check_account_owner(community_token_dto_info, program_id)?;
+
         let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -4009,6 +4025,9 @@ impl Processor {
 
         check_stake_program(stake_program_info.key)?;
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(community_token_staking_rewards_dto_info, program_id)?;
+        check_account_owner(community_token_dto_info, program_id)?;
+
         let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -4285,6 +4304,8 @@ impl Processor {
 
         check_stake_program(stake_program_info.key)?;
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(community_token_staking_rewards_dto_info, program_id)?;
+        check_account_owner(community_token_dto_info, program_id)?;
 
         let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
@@ -4655,6 +4676,8 @@ impl Processor {
         let rent_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(community_token_dto_info, program_id)?;
+
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -4741,6 +4764,10 @@ impl Processor {
         let clock = &Clock::from_account_info(clock_info)?;
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(community_token_dto_info, program_id)?;
+        check_account_owner(community_tokens_counter_dto_info, program_id)?;
+        check_account_owner(community_token_staking_rewards_dto_info, program_id)?;
+
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -4842,6 +4869,8 @@ impl Processor {
         let user_pool_token_account_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(community_token_staking_rewards_dto_info, program_id)?;
+
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -5196,6 +5225,8 @@ impl Processor {
         let _system_program = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
+        check_account_owner(metrics_counter_info, program_id)?;
+
         let stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
@@ -5214,12 +5245,14 @@ impl Processor {
         let mut metrics_counter = try_from_slice_unchecked::<MetricsDepositReferrerCounter>(&metrics_counter_info.data.borrow())?;
 
         while let Ok(metrics_account) = next_account_info(account_info_iter) {
+            check_account_owner(metrics_account, program_id)?;
+
             let metrics_account_pubkey = MetricsDepositReferrer::find_address(
                 program_id, 
                 stake_pool_info.key,
                 metrics_counter.get_number_of_flushed_accounts(),
             ).0;
-
+            
             if *metrics_account.key != metrics_account_pubkey {
                 return Err(StakePoolError::InvalidPdaAddress.into());
             } 
@@ -5292,7 +5325,6 @@ impl Processor {
         if *metadata_account_info.key != metadata_key {
             return Err(StakePoolError::InvalidProgramAddress.into());
         }
-
 
         let (inst, accs) = if metadata_account_info.data_is_empty() {
             (mpl_token_metadata::instruction::create_metadata_accounts_v2(
