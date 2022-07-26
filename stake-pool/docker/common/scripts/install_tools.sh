@@ -7,6 +7,8 @@ curl https://sh.rustup.rs -sSf | sh -s -- -y
 
 if [[ "$(uname -m)" == "x86_64" ]] ; then
     sh -c "$(curl -sSfL https://release.solana.com/v1.10.28/install)"
+    wget http://nz2.archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.16_amd64.deb
+    dpkg -i libssl1.1_1.1.1f-1ubuntu2.16_amd64.deb
 else
     git clone https://github.com/solana-labs/solana.git --branch v1.10.28
     cd solana
