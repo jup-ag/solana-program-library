@@ -1392,8 +1392,8 @@ impl Processor {
         let total_lamports = lamports.saturating_add(stake_rent);
 
         let reserve_stake_account_lamports = reserve_stake_account_info
-            .lamports()
-            .saturating_sub(stake_pool.total_lamports_liquidity);
+            .lamports();
+        //    .saturating_sub(stake_pool.total_lamports_liquidity);
         
         if reserve_stake_account_lamports
             .saturating_sub(total_lamports)
