@@ -1368,12 +1368,16 @@ impl Processor {
 
         let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeState>());
 
+        // it's up to the manager if they want to use liquidity sols.
+        // TODO: remove this snippet
+/*
         if let None = reserve_stake_account_info
             .lamports()
             .saturating_sub(stake_rent)
             .checked_sub(stake_pool.total_lamports_liquidity) {
             return Err(StakePoolError::SolLessThanLiquiditySol.into());
         }
+*/
 
         if lamports < MINIMUM_ACTIVE_STAKE {
             msg!(
