@@ -1183,6 +1183,11 @@ fn increase_validator_stake(
     let stake_rent = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+
+    // it's up to the manager if they want to use liquidity sols.
+    // TODO: remove this snippet or mke it optional
+/*
+    
     if let None = config
         .rpc_client
         .get_balance(&stake_pool.reserve_stake)?
@@ -1191,7 +1196,7 @@ fn increase_validator_stake(
     {
         return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
     }
-
+*/
     let mut signers = vec![config.fee_payer.as_ref(), config.staker.as_ref()];
     unique_signers!(signers);
     let transaction = checked_transaction_with_signers(
