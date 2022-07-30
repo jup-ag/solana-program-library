@@ -1729,7 +1729,13 @@ impl Processor {
                 }
                 None
                 | Some(stake::state::StakeState::Uninitialized)
-                | Some(stake::state::StakeState::RewardsPool) => {} // do nothing
+                | Some(stake::state::StakeState::RewardsPool) => {
+                    if validator_stake_record.status == StakeStatus::DeactivatingTransient {
+                        // the validator stake was previously removed, and
+                        // now this entry can be removed totally
+                        validator_stake_record.status = StakeStatus::ReadyForRemoval;
+                    }
+                }
             }
 
             // Status for validator stake
