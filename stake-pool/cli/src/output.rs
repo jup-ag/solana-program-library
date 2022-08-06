@@ -82,6 +82,7 @@ pub(crate) struct CliStakePool {
     pub referrer_list_storage_account: String,
     pub max_referrers: u32,
     pub max_validator_yield_per_epoch_numerator: u32,
+    pub no_fee_deposit_threshold: u16,
     pub details: Option<CliStakePoolDetails>,
 }
 
@@ -186,6 +187,7 @@ impl VerboseDisplay for CliStakePool {
         )?;           
         writeln!(w, "Treasury Fee: {} of epoch rewards", &self.treasury_fee)?;
         writeln!(w, "Max validator yield per epoch (numerator): {}", self.max_validator_yield_per_epoch_numerator)?;
+        writeln!(w, "No fee deposit threshold: {}", self.no_fee_deposit_threshold)?;
 
         match &self.details {
             None => {}
@@ -609,6 +611,7 @@ impl From<(Pubkey, StakePool, ValidatorList, Pubkey, ReferrerList, Pubkey)> for 
             referrer_list_storage_account: referrer_list_storage_account.to_string(),
             max_referrers: referrer_list.header.max_referrers,
             max_validator_yield_per_epoch_numerator: stake_pool.max_validator_yield_per_epoch_numerator,
+            no_fee_deposit_threshold: stake_pool.no_fee_deposit_threshold,
             details: None,
         }
     }

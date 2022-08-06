@@ -169,6 +169,9 @@ pub struct StakePool {
 
     /// Numerator for the Fix APY feature based on the 
     pub max_validator_yield_per_epoch_numerator: u32,
+
+    /// Deposit fee is taken from the deposit amount up to no_fee_deposit_threshold (sol)
+    pub no_fee_deposit_threshold: u16,
 }
 impl StakePool {
     /// 0.060144% - numerator of validator yield per epoch for validator 8% APY with 128 epochs in year.

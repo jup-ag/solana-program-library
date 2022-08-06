@@ -700,6 +700,7 @@ fn command_create_pool(
     treasury_keypair: Option<Keypair>,
     with_community_token: bool,
     unsafe_fees: bool,
+    no_fee_deposit_threshold: u16,
 ) -> CommandResult {
     if !unsafe_fees {
         check_stake_pool_fees(&epoch_fee, &withdrawal_fee, &deposit_fee)?;
@@ -869,6 +870,7 @@ fn command_create_pool(
             referral_fee,
             treasury_fee,
             max_validators,
+            no_fee_deposit_threshold,
         ),
     ];
 
@@ -3761,6 +3763,30 @@ fn command_set_fee(
     Ok(())
 }
 
+fn command_set_no_fee_deposit_threshold(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    no_fee_deposit_threshold: u16,
+) -> CommandResult {
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+    let mut signers = vec![config.fee_payer.as_ref(), config.manager.as_ref()];
+    unique_signers!(signers);
+    let transaction = checked_transaction_with_signers(
+        config,
+        &[spl_stake_pool::instruction::set_no_fee_deposit_threshold(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &config.manager.pubkey(),
+            no_fee_deposit_threshold,
+        )],
+        &signers,
+    )?;
+    send_transaction(config, transaction)?;
+    Ok(())
+}
+
 fn command_list_all_pools(config: &Config) -> CommandResult {
     let all_pools = get_stake_pools(&config.rpc_client)?;
     let cli_stake_pool_vec: Vec<CliStakePool> =
@@ -5151,6 +5177,14 @@ fn main() {
                     .help("Bypass fee checks, allowing pool to be created with unsafe fees"),
 
             )
+            .arg(
+                Arg::with_name("no_fee_deposit_threshold")
+                    .long("no-fee-deposit-threshold")
+                    .validator(is_parsable::<u16>)
+                    .value_name("THRESHOLD")
+                    .takes_value(true)
+                    .help("No fee taken from the amount higher than no_fee_deposit_threshold (in sol)"),
+            )
         )
         .subcommand(SubCommand::with_name("add-validator")
             .about("Add validator account to the stake pool. Must be signed by the pool staker.")
@@ -6216,6 +6250,27 @@ fn main() {
         
             )
         )
+        .subcommand(SubCommand::with_name("set-no-fee-deposit-threshold")
+            .about("Set or update no-fee-deposit-threshold so deposit fee is not taken from deposits higher than the threshold. Must be signed by the manager.")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address."),
+            )
+            .arg(
+                Arg::with_name("threshold")
+                    .index(2)
+                    .validator(is_parsable::<u16>)
+                    .value_name("THRESHOLD")
+                    .takes_value(true)
+                    .required(true)
+                    .help("No fee deposit threshold."),
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -6329,6 +6384,7 @@ fn main() {
             let treasury_keypair = keypair_of(arg_matches, "treasury_keypair");
             let with_community_token = arg_matches.is_present("with_community_token");
             let unsafe_fees = arg_matches.is_present("unsafe_fees");
+            let no_fee_deposit_threshold = value_t!(arg_matches, "no_fee_deposit_threshold", u16);
             command_create_pool(
                 &config,
                 deposit_authority,
@@ -6358,6 +6414,7 @@ fn main() {
                 treasury_keypair,
                 with_community_token,
                 unsafe_fees,
+                no_fee_deposit_threshold.unwrap_or(0),
             )
         }
         ("add-validator", Some(arg_matches)) => {
@@ -6778,7 +6835,13 @@ fn main() {
             let uri = arg_matches.value_of("uri").unwrap();
             let is_community_token = arg_matches.is_present("community-token");
             command_update_token_metadata(&config, &stake_pool_address, name, symbol, uri, is_community_token)
-        }     
+        }    
+        ("set-no-fee-deposit-threshold", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let threshold = value_t_or_exit!(arg_matches, "threshold", u16);
+
+            command_set_no_fee_deposit_threshold(&config, &stake_pool_address, threshold)
+        }         
         _ => unreachable!(),
     }
     .map_err(|err| {

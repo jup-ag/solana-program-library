@@ -25,7 +25,7 @@ use {
         decode_error::DecodeError,
         entrypoint::ProgramResult,
         msg,
-        native_token::LAMPORTS_PER_SOL,
+        native_token::{self, LAMPORTS_PER_SOL},
         program::{invoke, invoke_signed},
         program_error::PrintProgramError,
         program_error::ProgramError,
@@ -567,6 +567,7 @@ impl Processor {
         treasury_fee: Fee,
         referral_fee: u8,
         max_validators: u32,
+        no_fee_deposit_threshold: u16,
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
@@ -790,6 +791,7 @@ impl Processor {
         stake_pool.treasury_fee = treasury_fee;
         stake_pool.total_lamports_liquidity = 0;
         stake_pool.max_validator_yield_per_epoch_numerator = StakePool::DEFAULT_VALIDATOR_YIELD_PER_EPOCH_NUMERATOR;
+        stake_pool.no_fee_deposit_threshold = no_fee_deposit_threshold;
 
         let pool_tokens_minted = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(total_lamports)
@@ -2120,15 +2122,26 @@ impl Processor {
                     .ok_or(StakePoolError::CalculationFailure)?
             )
             .ok_or(StakePoolError::CalculationFailure)?;
-        let new_pool_tokens_from_stake = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
-            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
+            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < stake_deposit_lamports
+        {
+            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
+                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+            )
+            .ok_or(StakePoolError::CalculationFailure)?
+        } else {
+            stake_pool
+                .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
+                .ok_or(StakePoolError::CalculationFailure)?
+        };
+
         let new_pool_tokens_from_sol = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(sol_deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         let stake_deposit_fee = stake_pool
-            .calc_pool_tokens_stake_deposit_fee(new_pool_tokens_from_stake)
+            .calc_pool_tokens_stake_deposit_fee(new_pool_tokens_from_deposit_threshold)
             .ok_or(StakePoolError::CalculationFailure)?;
         let sol_deposit_fee = stake_pool
             .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_from_sol)
@@ -2292,6 +2305,18 @@ impl Processor {
         let new_pool_tokens_wo_idle_fee = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
+        
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
+            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < deposit_lamports
+        {
+            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
+                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+            )
+            .ok_or(StakePoolError::CalculationFailure)?
+        } else {
+            new_pool_tokens_wo_idle_fee
+        };
+
         let new_pool_tokens = stake_pool.calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
@@ -2300,7 +2325,7 @@ impl Processor {
         }
 
         let pool_tokens_sol_deposit_fee = stake_pool
-            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_wo_idle_fee)
+            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_from_deposit_threshold)
             .ok_or(StakePoolError::CalculationFailure)?;
         let pool_tokens_user = new_pool_tokens
             .checked_sub(pool_tokens_sol_deposit_fee)
@@ -2822,6 +2847,38 @@ impl Processor {
 
         fee.check_too_high()?;
         stake_pool.update_fee(&fee)?;
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+        Ok(())
+    }
+
+    
+    /// Changes the StakePool no fee deposit threshold.
+    /// Сan only be performed by the StakePool manager.
+    /// 
+    /// Processes [SetNoFeeDepositThreshold](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_set_no_fee_deposit_threshold(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+        no_fee_deposit_threshold: u16,
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+        let clock = Clock::get()?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        if stake_pool.last_update_epoch < clock.epoch {
+            return Err(StakePoolError::StakeListAndPoolOutOfDate.into());
+        }
+
+        stake_pool.no_fee_deposit_threshold = no_fee_deposit_threshold;
         stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
         Ok(())
     }
@@ -3453,6 +3510,18 @@ impl Processor {
         let new_pool_tokens_wo_idle_fee = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
+
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
+            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < deposit_lamports
+        {
+            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
+                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+            )
+            .ok_or(StakePoolError::CalculationFailure)?
+        } else {
+            new_pool_tokens_wo_idle_fee
+        };
+
         let new_pool_tokens = stake_pool.calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
@@ -3461,7 +3530,7 @@ impl Processor {
         }
 
         let pool_tokens_sol_deposit_fee = stake_pool
-            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_wo_idle_fee)
+            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_from_deposit_threshold)
             .ok_or(StakePoolError::CalculationFailure)?;
         let pool_tokens_user = new_pool_tokens
             .checked_sub(pool_tokens_sol_deposit_fee)
@@ -3685,6 +3754,18 @@ impl Processor {
         let new_pool_tokens_wo_idle_fee = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
+
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
+            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < deposit_lamports
+        {
+            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
+                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+            )
+            .ok_or(StakePoolError::CalculationFailure)?
+        } else {
+            new_pool_tokens_wo_idle_fee
+        };
+
         let new_pool_tokens = stake_pool.calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
@@ -3693,7 +3774,7 @@ impl Processor {
         }
 
         let pool_tokens_sol_deposit_fee = stake_pool
-            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_wo_idle_fee)
+            .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_from_deposit_threshold)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         let pool_tokens_user = new_pool_tokens
@@ -3726,7 +3807,16 @@ impl Processor {
 
         // we pay the referral fee in lamports
         let sol_referral_fee = stake_pool
-            .calc_sol_referral_fee(deposit_lamports)
+            .calc_sol_referral_fee(
+                if stake_pool.no_fee_deposit_threshold > 0 {
+                    std::cmp::min(
+                        deposit_lamports,
+                        native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64),
+                    )
+                } else {
+                    deposit_lamports
+                }
+            )
             .ok_or(StakePoolError::CalculationFailure)?;
 
         // this instruction shouldn't be used without referral fee
@@ -4542,15 +4632,26 @@ impl Processor {
                     .ok_or(StakePoolError::CalculationFailure)?
             )
             .ok_or(StakePoolError::CalculationFailure)?;
-        let new_pool_tokens_from_stake = stake_pool
-            .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
-            .ok_or(StakePoolError::CalculationFailure)?;
+
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
+            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < stake_deposit_lamports
+        {
+            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
+                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+            )
+            .ok_or(StakePoolError::CalculationFailure)?
+        } else {
+            stake_pool
+                .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
+                .ok_or(StakePoolError::CalculationFailure)?
+        };
+
         let new_pool_tokens_from_sol = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(sol_deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         let stake_deposit_fee = stake_pool
-            .calc_pool_tokens_stake_deposit_fee(new_pool_tokens_from_stake)
+            .calc_pool_tokens_stake_deposit_fee(new_pool_tokens_from_deposit_threshold)
             .ok_or(StakePoolError::CalculationFailure)?;
         let sol_deposit_fee = stake_pool
             .calc_pool_tokens_sol_deposit_fee(new_pool_tokens_from_sol)
@@ -5413,6 +5514,7 @@ impl Processor {
                 treasury_fee,
                 referral_fee,
                 max_validators,
+                no_fee_deposit_threshold,
             } => {
                 msg!("Instruction: Initialize stake pool");
                 Self::process_initialize(
@@ -5424,6 +5526,7 @@ impl Processor {
                     treasury_fee,
                     referral_fee,
                     max_validators,
+                    no_fee_deposit_threshold,
                 )
             }
             StakePoolInstruction::AddValidatorToPool => {
@@ -5612,7 +5715,11 @@ impl Processor {
             StakePoolInstruction::UpdateTokenMetadata { name, symbol, uri } => {
                 msg!("Instruction: UpdateTokenMetadata");
                 Self::process_update_token_metadata(program_id, accounts, name, symbol, uri)
-            }            
+            }
+            StakePoolInstruction::SetNoFeeDepositThreshold(no_fee_deposit_threshold) => {
+                msg!("Instruction: SetNoFeeDepositThreshold");
+                Self::process_set_no_fee_deposit_threshold(program_id, accounts, no_fee_deposit_threshold)
+            }       
         }
     }
 }

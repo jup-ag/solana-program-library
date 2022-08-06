@@ -80,6 +80,9 @@ pub enum StakePoolInstruction {
         /// Maximum expected number of validators
         #[allow(dead_code)] // but it's not
         max_validators: u32,
+        /// No fee deposit threshold
+        #[allow(dead_code)] // but it's not
+        no_fee_deposit_threshold: u16,
     },
 
     ///   (Staker only) Adds stake account delegated to validator to the pool's
@@ -708,7 +711,16 @@ pub enum StakePoolInstruction {
         /// token metadata uri
         #[allow(dead_code)] // but it's not
         uri: String,
-    },    
+    },
+    
+
+    /// (Manager only) No fee deposit threshold
+    ///
+    ///  0. `[w]` StakePool
+    ///  1. `[s]` Manager
+    /// 
+    /// userdata: threshold
+    SetNoFeeDepositThreshold(u16),
 }
 
 /// Creates an 'initialize' instruction.
@@ -731,6 +743,7 @@ pub fn initialize(
     referral_fee: u8,
     treasury_fee: Fee,
     max_validators: u32,
+    no_fee_deposit_threshold: u16,
 ) -> Instruction {
     let init_data = StakePoolInstruction::Initialize {
         fee,
@@ -739,6 +752,7 @@ pub fn initialize(
         treasury_fee,
         referral_fee,
         max_validators,
+        no_fee_deposit_threshold,
     };
     let data = init_data.try_to_vec().unwrap();
     let mut accounts = vec![
@@ -1581,6 +1595,26 @@ pub fn set_fee(
         program_id: *program_id,
         accounts,
         data: StakePoolInstruction::SetFee { fee }.try_to_vec().unwrap(),
+    }
+}
+
+/// Creates a 'set no fee deposit threshold' instruction.
+pub fn set_no_fee_deposit_threshold(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    manager: &Pubkey,
+    no_fee_deposit_threshold: u16,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*manager, true),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::SetNoFeeDepositThreshold(
+            no_fee_deposit_threshold
+        ).try_to_vec().unwrap(),
     }
 }
 
