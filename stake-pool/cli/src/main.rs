@@ -1185,20 +1185,16 @@ fn increase_validator_stake(
     let stake_rent = config
         .rpc_client
         .get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
-
-    // it's up to the manager if they want to use liquidity sols.
-    // TODO: remove this snippet or mke it optional
-/*
     
     if let None = config
         .rpc_client
         .get_balance(&stake_pool.reserve_stake)?
-        .saturating_sub(stake_rent)
-        .checked_sub(stake_pool.total_lamports_liquidity)
+        .checked_sub(2*stake_rent) // we split reserve stake so we should pay the double rent
+//        .checked_sub(stake_pool.total_lamports_liquidity)
     {
         return Err("The number of sol on the stake pool's reserve account is less than the number of liquidity sol".into());
     }
-*/
+
     let mut signers = vec![config.fee_payer.as_ref(), config.staker.as_ref()];
     unique_signers!(signers);
     let transaction = checked_transaction_with_signers(
@@ -4004,21 +4000,21 @@ fn command_withdraw_liquidity_sol(
 fn command_distribute_stake(
     config: &Config,
     stake_pool_address: &Pubkey,
+    consume_liquidity: f64,
+    threshold: f64,
 ) -> CommandResult {
+    const INSTRUCTIONS_IN_TRANSACTION: usize = 7;
+
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-
     let epoch = config.rpc_client.get_epoch_info()?.epoch;
-
     let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
     let contract_validators_quantity = validator_list.validators.len();
-
     let response = reqwest::blocking::get(ValidatorsInfo::url_get_current_validators())?;
     let validators_api_response = serde_json::from_slice::<'_, PoolValidatorsApiResponse>(&response.bytes()?[..])?;
 
     if contract_validators_quantity == 0 {
         println!("There are no validators in validator list.");
-
-        return Ok(());
+        return Err("No distribution performed".into())
     }
 
     let mut total_score_for_distribution_strategy: u128 = 0;
@@ -4055,11 +4051,7 @@ fn command_distribute_stake(
         }
     }
     if contract_existing_validators_prepared_for_distribution_full_data.is_empty() {
-        return Err(
-            format!(
-                "Unable to make distribution. Since all validators have transient stake-accounts.",
-            ).into()
-        );
+        return Err("Unable to make distribution. Since all validators have transient stake-accounts.".into());
     }
     contract_existing_validators_prepared_for_distribution_full_data.sort_by(
         |left: &(&ValidatorStakeInfo, &PoolValidatorsData), right: &(&ValidatorStakeInfo, &PoolValidatorsData)| -> Ordering {
@@ -4082,15 +4074,27 @@ fn command_distribute_stake(
         .rpc_client
         .get_balance(&stake_pool.reserve_stake)?
         .saturating_sub(stake_rent);
-    if active_lamports > stake_pool.total_lamports_liquidity {
-        let active_lamports_for_distribution = active_lamports - stake_pool.total_lamports_liquidity;
-        if active_lamports_for_distribution < MINIMUM_ACTIVE_STAKE {
-            println!("Not enough Sols for distribution.");
 
-            return Ok(());
+    let mut instructions: Vec<_> = vec![];
+    let consume_liquidity_lamports = native_token::sol_to_lamports(consume_liquidity);
+    let threshold_lamports = native_token::sol_to_lamports(threshold);
+
+    if active_lamports > stake_pool.total_lamports_liquidity.checked_sub(consume_liquidity_lamports).unwrap_or(u64::MAX) {
+        let active_lamports_for_distribution = active_lamports - (stake_pool.total_lamports_liquidity - consume_liquidity_lamports);
+        let active_lamports_for_distribution = active_lamports_for_distribution;
+        if active_lamports_for_distribution < MINIMUM_ACTIVE_STAKE 
+            || active_lamports_for_distribution < threshold_lamports
+        {
+            println!("No need for stake distibution, because active_lamports_for_distribution is less than MINIMUM_ACTIVE_STAKE or threshold:\n stake {}, liquidity {}, consume liquidity {}, threshold {}",
+                native_token::lamports_to_sol(active_lamports),
+                native_token::lamports_to_sol(stake_pool.total_lamports_liquidity),
+                consume_liquidity,
+                threshold,
+            );
+            return Err("No distribution performed".into());
         }
         let mut active_lamports_for_distribution_ = active_lamports_for_distribution;
-        let mut validators_for_distribution_data: Vec<(&Pubkey, u64)> = vec![];
+        let mut validators_for_distribution_data: Vec<(&Pubkey, u64, u64)> = vec![];
         let mut amount_will_be_distributed: u64 = 0;
         'd: for (validator_stake_info, validators_data) in contract_existing_validators_prepared_for_distribution_full_data.iter() {
             let validator_total_lamports_should_be_distributed = u64::try_from(
@@ -4104,12 +4108,12 @@ fn command_distribute_stake(
                 let lamports_to_distribute_additionally = validator_total_lamports_should_be_distributed - validator_stake_info.active_stake_lamports;
                 if lamports_to_distribute_additionally > MINIMUM_ACTIVE_STAKE {
                     if active_lamports_for_distribution_ >= lamports_to_distribute_additionally {
-                        validators_for_distribution_data.push((&validator_stake_info.vote_account_address, lamports_to_distribute_additionally));
+                        validators_for_distribution_data.push((&validator_stake_info.vote_account_address, lamports_to_distribute_additionally, validator_stake_info.transient_seed_suffix_start));
                         amount_will_be_distributed = amount_will_be_distributed + lamports_to_distribute_additionally;
                         active_lamports_for_distribution_ = active_lamports_for_distribution_ - lamports_to_distribute_additionally;
                     } else {
                         if active_lamports_for_distribution_ >= MINIMUM_ACTIVE_STAKE {
-                            validators_for_distribution_data.push((&validator_stake_info.vote_account_address, active_lamports_for_distribution_));
+                            validators_for_distribution_data.push((&validator_stake_info.vote_account_address, active_lamports_for_distribution_, validator_stake_info.transient_seed_suffix_start));
                             amount_will_be_distributed = amount_will_be_distributed + active_lamports_for_distribution_;
                         }
 
@@ -4119,69 +4123,63 @@ fn command_distribute_stake(
             }
         }
         if !validators_for_distribution_data.is_empty() {
-            '_e: for (i, (vote_address, lamports_for_distribution)) in validators_for_distribution_data.into_iter().enumerate() {
-                if i == 0 {
-                    increase_validator_stake(
-                        config,
+            '_e: for (i, (vote_address, lamports_for_distribution, seed)) in validators_for_distribution_data.into_iter().enumerate() {                
+                let amount = if i == 0 {
+                    lamports_for_distribution + active_lamports_for_distribution - amount_will_be_distributed
+                } else {
+                    lamports_for_distribution
+                };
+
+                instructions.push(
+                    spl_stake_pool::instruction::increase_validator_stake_with_vote(
+                        &spl_stake_pool::id(),
+                        &stake_pool,
                         stake_pool_address,
                         vote_address,
-                        lamports_for_distribution + active_lamports_for_distribution - amount_will_be_distributed
-                    )?;
-                } else {
-                    increase_validator_stake(
-                        config,
-                        stake_pool_address,
-                        vote_address,
-                        lamports_for_distribution
-                    )?;
-                }
+                        amount,
+                        seed,
+                    ),
+                )
             }
-        } else {
-            increase_validator_stake(
-                config,
-                stake_pool_address,
-                &contract_existing_validators_prepared_for_distribution_full_data[0].0.vote_account_address,
-                active_lamports_for_distribution
-            )?;
-        }
-    } else {
-        if active_lamports == 0 {
-            return Ok(());
-        } else {
-            let mut lamports_for_liquidity_recovery = stake_pool.total_lamports_liquidity - active_lamports;
-            if lamports_for_liquidity_recovery < MINIMUM_ACTIVE_STAKE {
-                println!("Not enough Sols for distribution.");
 
-                return Ok(());
-            }
-            'g: for (validator_stake_info, _) in contract_existing_validators_prepared_for_distribution_full_data.iter().rev() {
-                if lamports_for_liquidity_recovery >= validator_stake_info.active_stake_lamports {
-                    if validator_stake_info.active_stake_lamports > MINIMUM_ACTIVE_STAKE {
-                        decrease_validator_stake(
-                            config,
-                            stake_pool_address,
-                            &validator_stake_info.vote_account_address,
-                            validator_stake_info.active_stake_lamports,
-                        )?;
-                        lamports_for_liquidity_recovery = lamports_for_liquidity_recovery - validator_stake_info.active_stake_lamports;
-                    }
-                } else {
-                    if lamports_for_liquidity_recovery >= MINIMUM_ACTIVE_STAKE {
-                        decrease_validator_stake(
-                            config,
-                            stake_pool_address,
-                            &validator_stake_info.vote_account_address,
-                            lamports_for_liquidity_recovery,
-                        )?;
-                    }
-
-                    break 'g;
-                }
-            }
+        } else {
+            instructions.push(
+                spl_stake_pool::instruction::increase_validator_stake_with_vote(
+                    &spl_stake_pool::id(),
+                    &stake_pool,
+                    stake_pool_address,
+                    &contract_existing_validators_prepared_for_distribution_full_data[0].0.vote_account_address,
+                    active_lamports_for_distribution,
+                    contract_existing_validators_prepared_for_distribution_full_data[0].0.transient_seed_suffix_start,
+                ),
+            )
         }
     }
+    
+    if instructions.len() > 0 {
+        for chunk in instructions.chunks(INSTRUCTIONS_IN_TRANSACTION) {
+            let mut signers = vec![config.fee_payer.as_ref(), config.staker.as_ref()];
+            unique_signers!(signers);
 
-    Ok(())
+            let transaction = checked_transaction_with_signers(
+                config,
+                chunk,
+                &signers,
+            )?;
+            send_transaction(config, transaction)?;
+        }
+        println!("The stake has been distributed successfully");
+        return Ok(())
+    }
+
+    println!("No need for stake distibution, because there are no instructions: stake {}, liquidity {}, consume liquidity {}, threshold {}",
+        native_token::lamports_to_sol(active_lamports),
+        native_token::lamports_to_sol(stake_pool.total_lamports_liquidity),
+        consume_liquidity,
+        threshold,
+    );
+
+    Err("No distribution performed".into())
 }
 
 fn command_withdraw_stake_for_subsequent_removing_validator(
@@ -5948,6 +5946,22 @@ fn main() {
                     .required(true)
                     .help("Stake pool address."),
             )
+            .arg(
+                Arg::with_name("consume-liquidity")
+                    .long("consume-liquidity")
+                    .validator(is_parsable::<u64>)
+                    .value_name("CONSUME-LIQUIDITY")
+                    .takes_value(true)
+                    .help("Amount in SOL taken from liquidity for distribution"),
+            )
+            .arg(
+                Arg::with_name("threshold")
+                    .long("threshold")
+                    .validator(is_parsable::<u64>)
+                    .value_name("THRESHOLD")
+                    .takes_value(true)
+                    .help("Distribute stake only if it's greater than the threshold"),
+            )
         )
         .subcommand(SubCommand::with_name("change-validators")
             .about("Take necessary validators and change stake pool`s validator list")
@@ -6806,8 +6820,10 @@ fn main() {
         }
         ("distribute-stake", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            let consume_liquidity = value_t!(arg_matches, "consume-liquidity", f64).unwrap_or_default();
+            let threshold = value_t!(arg_matches, "threshold", f64).unwrap_or_default();
 
-            command_distribute_stake(&config, &stake_pool_address)
+            command_distribute_stake(&config, &stake_pool_address, consume_liquidity, threshold)
         }
         ("withdraw-stake-for-subsequent-removing-validator", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
