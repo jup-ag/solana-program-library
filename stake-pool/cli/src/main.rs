@@ -2494,7 +2494,7 @@ fn command_list(config: &Config, stake_pool_address: &Pubkey) -> CommandResult {
 
 
     let mut dao_details = None;
-    let dao_state = get_dao_state(&config.rpc_client, stake_pool_address).unwrap_or_default();  
+    let dao_state = get_dao_state(&config.rpc_client, stake_pool_address).unwrap_or_default();
     if dao_state {
         dao_details = Some(CliDaoDetails::from((
             get_community_token(&config.rpc_client, stake_pool_address)?.to_string(),
@@ -3997,75 +3997,115 @@ fn command_withdraw_liquidity_sol(
     Ok(())
 }
 
-fn command_distribute_stake(
+
+struct StakeDistributionInfo {
+    validators_stake_distribution_vec: Vec<ValidatorStakeDistributionData>
+}
+
+impl StakeDistributionInfo {
+    pub fn new() -> Self {
+        Self {
+            validators_stake_distribution_vec: vec![],
+        }
+    }
+
+    pub fn add_validator_stake_distribution_data(
+        &mut self,
+        stake_info: spl_stake_pool::state::ValidatorStakeInfo,
+        pool_data: PoolValidatorsData,
+        lamports_distributed: u64,
+        lamports_should_be_distributed: u64,
+        lamports_to_distribute: u64,        
+    ) {
+        self.validators_stake_distribution_vec.push(ValidatorStakeDistributionData::new(
+            stake_info,
+            pool_data,
+            lamports_distributed,
+            lamports_should_be_distributed,
+            lamports_to_distribute,            
+        ))
+    }
+
+    pub fn print(&self) {
+        for (num, item_data) in self.validators_stake_distribution_vec.iter().enumerate() {
+            println!("{}.{} distributed {}, should be distributed {}, filled {:.2}%, to distribute {}", 
+                num+1, item_data.pool_data.name, 
+                native_token::lamports_to_sol(item_data.lamports_distributed),
+                native_token::lamports_to_sol(item_data.lamports_should_be_distributed),
+                (item_data.lamports_distributed as f64/item_data.lamports_should_be_distributed as f64) * 100.0,
+                native_token::lamports_to_sol(item_data.lamports_to_distribute),
+            )
+        }
+    }
+}
+
+struct ValidatorStakeDistributionData {
+    stake_info: spl_stake_pool::state::ValidatorStakeInfo,
+    pool_data: PoolValidatorsData,
+    lamports_distributed: u64,
+    lamports_should_be_distributed: u64,
+    lamports_to_distribute: u64,
+}
+
+impl ValidatorStakeDistributionData {
+    pub fn new(
+        stake_info: spl_stake_pool::state::ValidatorStakeInfo,
+        pool_data: PoolValidatorsData,
+        lamports_distributed: u64,
+        lamports_should_be_distributed: u64,
+        lamports_to_distribute: u64,
+    ) -> Self {
+        Self {
+            stake_info,
+            pool_data,
+            lamports_distributed,
+            lamports_should_be_distributed,
+            lamports_to_distribute,            
+        }
+    }
+}
+
+fn get_stake_distribution_info(
     config: &Config,
     stake_pool_address: &Pubkey,
     consume_liquidity: f64,
-    threshold: f64,
-) -> CommandResult {
-    const INSTRUCTIONS_IN_TRANSACTION: usize = 7;
+    threshold: f64,    
+) -> Result<(StakeDistributionInfo,bool), Error> {
+    const DISTRIBUTION_MULTIPLIER: f64 = 1.5;
 
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-    let epoch = config.rpc_client.get_epoch_info()?.epoch;
     let validator_list = get_validator_list(&config.rpc_client, &stake_pool.validator_list)?;
-    let contract_validators_quantity = validator_list.validators.len();
     let response = reqwest::blocking::get(ValidatorsInfo::url_get_current_validators())?;
     let validators_api_response = serde_json::from_slice::<'_, PoolValidatorsApiResponse>(&response.bytes()?[..])?;
+    let consume_liquidity_lamports = native_token::sol_to_lamports(consume_liquidity);
+    let threshold_lamports = native_token::sol_to_lamports(threshold);
 
-    if contract_validators_quantity == 0 {
-        println!("There are no validators in validator list.");
-        return Err("No distribution performed".into())
+    if consume_liquidity_lamports >= stake_pool.total_lamports_liquidity {
+        return Err("Consume liquidity must be less than total liquidity".into())
     }
-
-    let mut total_score_for_distribution_strategy: u128 = 0;
-    let mut contract_existing_validators_prepared_for_distribution_full_data: Vec<(&ValidatorStakeInfo, &PoolValidatorsData)> = vec![];
-    '_a: for validator_stake_info in validator_list.validators.iter() {
-        let mut is_exist = false;
-        'b: for validators_data in validators_api_response.data.iter() {
-            if validator_stake_info.vote_account_address.to_string() == validators_data.vote_pk {
-                if validator_stake_info.last_update_epoch != epoch {
-                    return Err(
-                        format!(
-                            "{} validator is not updated.",
-                            validator_stake_info.vote_account_address
-                        ).into()
-                    );
-                }
-
-                total_score_for_distribution_strategy = total_score_for_distribution_strategy + u128::try_from(validators_data.score)?;
-                is_exist = true;
-                if validator_stake_info.transient_stake_lamports == 0 {
-                    contract_existing_validators_prepared_for_distribution_full_data.push((validator_stake_info, validators_data));
-                }
-
-                break 'b;
-            }
-        }
-        if !is_exist {
-            return Err(
-                format!(
-                    "Desynchronized state. {} validator is not present in the backend, therefore we cannot take information.",
-                    validator_stake_info.vote_account_address
-                ).into()
-            );
-        }
+    if validator_list.validators.len() == 0 || validators_api_response.data.len() == 0 || validators_api_response.data.len() != validator_list.validators.len(){
+        return Err("The backend and the program are unsynchronized or validators list is empty".into())
     }
-    if contract_existing_validators_prepared_for_distribution_full_data.is_empty() {
-        return Err("Unable to make distribution. Since all validators have transient stake-accounts.".into());
-    }
-    contract_existing_validators_prepared_for_distribution_full_data.sort_by(
-        |left: &(&ValidatorStakeInfo, &PoolValidatorsData), right: &(&ValidatorStakeInfo, &PoolValidatorsData)| -> Ordering {
-            if left.1.apy < right.1.apy {
-                Ordering::Greater
-            } else {
-                if left.1.apy > right.1.apy {
-                    Ordering::Less
-                } else {
-                    Ordering::Equal
-                }
-            }
-        }
+    let mut validators_aggregated_data: Vec<(&ValidatorStakeInfo, &PoolValidatorsData)> = vec![];
+
+    for sp_validator in &validator_list.validators {
+        let found_validator = validators_api_response.data.iter().find(|resp_validator| resp_validator.vote_pk == sp_validator.vote_account_address.to_string()).ok_or(        
+            format!("The backend and the program are unsynchronized: {} validator is missing on the backend", sp_validator.vote_account_address)
+        )?;
+        validators_aggregated_data.push((sp_validator, found_validator));
+    };
+
+    validators_aggregated_data.sort_by(
+        |a, b| b.1.apy.partial_cmp(&a.1.apy).unwrap()
     );
+
+    let average_apy = 100.0 * validators_aggregated_data.iter().map(|x| x.1.apy).sum::<f64>() / validators_aggregated_data.len() as f64;
+    let max_negative_deviation = 100.0 * validators_aggregated_data.last().unwrap().1.apy - average_apy;
+    let distribution_coefficients = validators_aggregated_data.iter().map(
+        |x| 100.0 * x.1.apy - average_apy - max_negative_deviation * DISTRIBUTION_MULTIPLIER
+    );
+    let distribution_coefficients_total = distribution_coefficients.clone().sum::<f64>();
+    let distribution_shares: Vec<f64> = distribution_coefficients.map(|x| x / distribution_coefficients_total).collect();
 
     let stake_rent = config
         .rpc_client
@@ -4075,111 +4115,149 @@ fn command_distribute_stake(
         .get_balance(&stake_pool.reserve_stake)?
         .saturating_sub(stake_rent);
 
-    let mut instructions: Vec<_> = vec![];
-    let consume_liquidity_lamports = native_token::sol_to_lamports(consume_liquidity);
-    let threshold_lamports = native_token::sol_to_lamports(threshold);
-
-    if active_lamports > stake_pool.total_lamports_liquidity.checked_sub(consume_liquidity_lamports).unwrap_or(u64::MAX) {
+    let mut distribution_allowed = false;
+    let mut lamports_left = if active_lamports > stake_pool.total_lamports_liquidity.checked_sub(consume_liquidity_lamports).unwrap_or(u64::MAX) {
         let active_lamports_for_distribution = active_lamports - (stake_pool.total_lamports_liquidity - consume_liquidity_lamports);
         let active_lamports_for_distribution = active_lamports_for_distribution;
-        if active_lamports_for_distribution < MINIMUM_ACTIVE_STAKE 
-            || active_lamports_for_distribution < threshold_lamports
-        {
-            println!("No need for stake distibution, because active_lamports_for_distribution is less than MINIMUM_ACTIVE_STAKE or threshold:\n stake {}, liquidity {}, consume liquidity {}, threshold {}",
-                native_token::lamports_to_sol(active_lamports),
-                native_token::lamports_to_sol(stake_pool.total_lamports_liquidity),
-                consume_liquidity,
-                threshold,
-            );
-            return Err("No distribution performed".into());
-        }
-        let mut active_lamports_for_distribution_ = active_lamports_for_distribution;
-        let mut validators_for_distribution_data: Vec<(&Pubkey, u64, u64)> = vec![];
-        let mut amount_will_be_distributed: u64 = 0;
-        'd: for (validator_stake_info, validators_data) in contract_existing_validators_prepared_for_distribution_full_data.iter() {
-            let validator_total_lamports_should_be_distributed = u64::try_from(
-                (stake_pool.total_lamports as u128)
-                    .checked_mul(u128::try_from(validators_data.score)?)
-                    .ok_or("Calculation error")?
-                    .checked_div(total_score_for_distribution_strategy)
-                    .ok_or("Calculation error")?,
-            )?;
-            if validator_total_lamports_should_be_distributed >= validator_stake_info.active_stake_lamports {
-                let lamports_to_distribute_additionally = validator_total_lamports_should_be_distributed - validator_stake_info.active_stake_lamports;
-                if lamports_to_distribute_additionally > MINIMUM_ACTIVE_STAKE {
-                    if active_lamports_for_distribution_ >= lamports_to_distribute_additionally {
-                        validators_for_distribution_data.push((&validator_stake_info.vote_account_address, lamports_to_distribute_additionally, validator_stake_info.transient_seed_suffix_start));
-                        amount_will_be_distributed = amount_will_be_distributed + lamports_to_distribute_additionally;
-                        active_lamports_for_distribution_ = active_lamports_for_distribution_ - lamports_to_distribute_additionally;
-                    } else {
-                        if active_lamports_for_distribution_ >= MINIMUM_ACTIVE_STAKE {
-                            validators_for_distribution_data.push((&validator_stake_info.vote_account_address, active_lamports_for_distribution_, validator_stake_info.transient_seed_suffix_start));
-                            amount_will_be_distributed = amount_will_be_distributed + active_lamports_for_distribution_;
-                        }
+        distribution_allowed = active_lamports_for_distribution > MINIMUM_ACTIVE_STAKE && active_lamports_for_distribution > threshold_lamports;
+        active_lamports_for_distribution
+    } else {
+        0
+    };
+    let mut stake_distribution_info = StakeDistributionInfo::new();
 
-                        break 'd;
-                    }
-                }
+    for ((validator_stake_info, validators_data), validator_share) in validators_aggregated_data.into_iter().zip(distribution_shares.iter()) {
+        let validator_lamports_from_distribution: u64 =
+            (validator_share * (stake_pool.total_lamports as u128)
+                .checked_add(consume_liquidity_lamports as u128)
+                .ok_or("Calculation error")? as f64) as u64;
+        
+        let mut lamports_to_distribute = 0;
+
+        if validator_lamports_from_distribution > validator_stake_info.active_stake_lamports + MINIMUM_ACTIVE_STAKE + stake_rent
+           && validator_stake_info.transient_stake_lamports == 0 {
+            let potential_lamports_to_distribute = validator_lamports_from_distribution - validator_stake_info.active_stake_lamports;
+
+            if lamports_left > potential_lamports_to_distribute {
+                lamports_left = lamports_left - potential_lamports_to_distribute;
+                lamports_to_distribute = potential_lamports_to_distribute
+            } else if lamports_left >= MINIMUM_ACTIVE_STAKE + stake_rent {
+                lamports_to_distribute = lamports_left;
+                lamports_left = 0
+            };
+        }
+
+        stake_distribution_info.add_validator_stake_distribution_data(
+            *validator_stake_info, 
+            validators_data.clone(),
+            validator_stake_info.active_stake_lamports, 
+            validator_lamports_from_distribution, 
+            lamports_to_distribute,
+        )
+    }
+
+    // corner case: there could be calculation inaccuracies or transient accounts on validators, 
+    // so we try to put what is left on a top-5 profitable validator
+    if lamports_left > 0 {
+        for (num, item_data) in stake_distribution_info.validators_stake_distribution_vec.iter().enumerate() {
+            if item_data.stake_info.transient_stake_lamports == 0 {
+                stake_distribution_info.validators_stake_distribution_vec[num].lamports_to_distribute += lamports_left;
+                break
+            }
+            if num >= 4 {
+                break
             }
         }
-        if !validators_for_distribution_data.is_empty() {
-            '_e: for (i, (vote_address, lamports_for_distribution, seed)) in validators_for_distribution_data.into_iter().enumerate() {                
-                let amount = if i == 0 {
-                    lamports_for_distribution + active_lamports_for_distribution - amount_will_be_distributed
-                } else {
-                    lamports_for_distribution
-                };
+    }
 
+    Ok((stake_distribution_info, distribution_allowed))
+}
+
+fn command_distribute_stake(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+    consume_liquidity: f64,
+    threshold: f64,
+    slots_before_epoch_end: u64,
+) -> CommandResult {
+    if slots_before_epoch_end !=0 {
+        let epoch_info = config.rpc_client.get_epoch_info()?;
+        let slots_left = epoch_info.slots_in_epoch.checked_sub(epoch_info.slot_index).ok_or("Calculation error")?;
+        if config.verbose {
+            println!("Allowed slots before epoch end {} slots in epoch {} current slot {}, epoch progress {:.2}%",
+                slots_before_epoch_end, epoch_info.slots_in_epoch, epoch_info.slot_index, (epoch_info.slot_index as f64/epoch_info.slots_in_epoch as f64)*100.0);
+        }
+        if slots_left > slots_before_epoch_end {
+            return Err(format!("Distribution can be performed only when {} or less slots left in the current epoch", slots_before_epoch_end).into())
+        }
+    }
+    if !config.no_update {
+        command_update(config, stake_pool_address, false, false)?;
+    }
+    const INSTRUCTIONS_IN_TRANSACTION: usize = 7;
+
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+    let stake_rent = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(std::mem::size_of::<stake::state::StakeState>())?;
+    let active_lamports = config
+        .rpc_client
+        .get_balance(&stake_pool.reserve_stake)?
+        .saturating_sub(stake_rent);
+    
+    let (stake_distribution_info, distribution_allowed) = get_stake_distribution_info(
+        config,
+        stake_pool_address,
+        consume_liquidity,
+        threshold       
+    )?;
+
+    if config.verbose {
+        stake_distribution_info.print();
+        println!("distribution allowed = {}", distribution_allowed)
+    }
+
+    if distribution_allowed { 
+        let mut instructions: Vec<_> = vec![];
+
+        for item_data in &stake_distribution_info.validators_stake_distribution_vec {
+            if item_data.lamports_to_distribute > stake_rent 
+               && item_data.stake_info.transient_stake_lamports == 0 {
                 instructions.push(
                     spl_stake_pool::instruction::increase_validator_stake_with_vote(
                         &spl_stake_pool::id(),
                         &stake_pool,
                         stake_pool_address,
-                        vote_address,
-                        amount,
-                        seed,
+                        &item_data.stake_info.vote_account_address,
+                        item_data.lamports_to_distribute - stake_rent,
+                        item_data.stake_info.transient_seed_suffix_start,
                     ),
-                )
+                );
             }
+        }
 
-        } else {
-            instructions.push(
-                spl_stake_pool::instruction::increase_validator_stake_with_vote(
-                    &spl_stake_pool::id(),
-                    &stake_pool,
-                    stake_pool_address,
-                    &contract_existing_validators_prepared_for_distribution_full_data[0].0.vote_account_address,
-                    active_lamports_for_distribution,
-                    contract_existing_validators_prepared_for_distribution_full_data[0].0.transient_seed_suffix_start,
-                ),
-            )
+        if instructions.len() > 0 {
+            for chunk in instructions.chunks(INSTRUCTIONS_IN_TRANSACTION) {
+                let mut signers = vec![config.fee_payer.as_ref(), config.staker.as_ref()];
+                unique_signers!(signers);
+
+                let transaction = checked_transaction_with_signers(
+                    config,
+                    chunk,
+                    &signers,
+                )?;
+                send_transaction(config, transaction)?;
+            }
+            println!("The stake has been distributed successfully");
+            return Ok(())
         }
     }
-    
-    if instructions.len() > 0 {
-        for chunk in instructions.chunks(INSTRUCTIONS_IN_TRANSACTION) {
-            let mut signers = vec![config.fee_payer.as_ref(), config.staker.as_ref()];
-            unique_signers!(signers);
-
-            let transaction = checked_transaction_with_signers(
-                config,
-                chunk,
-                &signers,
-            )?;
-            send_transaction(config, transaction)?;
-        }
-        println!("The stake has been distributed successfully");
-        return Ok(())
-    }
-
-    println!("No need for stake distibution, because there are no instructions: stake {}, liquidity {}, consume liquidity {}, threshold {}",
+    Err(format!("No need for stake distibution: stake {}, liquidity {}, consume liquidity {}, threshold {}",
         native_token::lamports_to_sol(active_lamports),
         native_token::lamports_to_sol(stake_pool.total_lamports_liquidity),
         consume_liquidity,
         threshold,
-    );
-
-    Err("No distribution performed".into())
+    ).into())
 }
 
 fn command_withdraw_stake_for_subsequent_removing_validator(
@@ -4310,7 +4388,7 @@ pub struct PoolValidatorsApiResponse {
 }
 
 // DTO for https://api.stakesolana.app/v1/pool-validators/{pname}
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct PoolValidatorsData {
     #[allow(dead_code)]
     name: String,
@@ -5949,7 +6027,7 @@ fn main() {
             .arg(
                 Arg::with_name("consume-liquidity")
                     .long("consume-liquidity")
-                    .validator(is_parsable::<u64>)
+                    .validator(is_parsable::<f64>)
                     .value_name("CONSUME-LIQUIDITY")
                     .takes_value(true)
                     .help("Amount in SOL taken from liquidity for distribution"),
@@ -5957,10 +6035,18 @@ fn main() {
             .arg(
                 Arg::with_name("threshold")
                     .long("threshold")
-                    .validator(is_parsable::<u64>)
+                    .validator(is_parsable::<f64>)
                     .value_name("THRESHOLD")
                     .takes_value(true)
                     .help("Distribute stake only if it's greater than the threshold"),
+            )
+            .arg(
+                Arg::with_name("slots-before-epoch-end")
+                    .long("slots-before-epoch-end")
+                    .validator(is_parsable::<u64>)
+                    .value_name("SLOTS")
+                    .takes_value(true)
+                    .help("Distribute stake only if the number of slots left in the current epoch is less than this value"),
             )
         )
         .subcommand(SubCommand::with_name("change-validators")
@@ -6822,8 +6908,9 @@ fn main() {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
             let consume_liquidity = value_t!(arg_matches, "consume-liquidity", f64).unwrap_or_default();
             let threshold = value_t!(arg_matches, "threshold", f64).unwrap_or_default();
+            let slots_before_epoch_end = value_t!(arg_matches, "slots-before-epoch-end", u64).unwrap_or_default();
 
-            command_distribute_stake(&config, &stake_pool_address, consume_liquidity, threshold)
+            command_distribute_stake(&config, &stake_pool_address, consume_liquidity, threshold, slots_before_epoch_end)
         }
         ("withdraw-stake-for-subsequent-removing-validator", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
