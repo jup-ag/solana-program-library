@@ -414,7 +414,7 @@ struct ValidatorsInfo {
 impl ValidatorsInfo {
     fn url_get_current_validators() -> String {
         format!("https://api.stakesolana.app/v1/pool-validators/Eversol?sort=apy&desc=true&offset=0&limit={}",
-            VALIDATORS_QUANTITY,
+            VALIDATORS_QUANTITY+10, // increased the limit in case the actual number differs from the defined one
         )
     }
     
