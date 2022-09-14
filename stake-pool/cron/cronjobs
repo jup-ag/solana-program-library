@@ -1,3 +1,4 @@
-0,15,30,45 * * * * /home/stakepool/cron/update-stake-pool.sh && curl -fsS -m 10 --retry 5 -o /dev/null https://hc-ping.com/1b1f2580-4797-4070-adda-9ec177a8632b
+*/5 * * * * /home/stakepool/cron/update-stake-pool.sh && curl -fsS -m 10 --retry 5 -o /dev/null https://hc-ping.com/1b1f2580-4797-4070-adda-9ec177a8632b
 0 */3 * * * /home/stakepool/solana-program-library/target/release/spl-stake-pool dao-strategy-distribute-community-tokens GUAMR8ciiaijraJeLDEDrFVaueLm9YzWWY9R7CBPL9rA
 0 0 1 * * /home/stakepool/solana-program-library/target/release/spl-stake-pool show-metrics-deposit-referrer GUAMR8ciiaijraJeLDEDrFVaueLm9YzWWY9R7CBPL9rA --last-month > /home/stakepool/stake-pool-logs/"Referral program metrics $(date +\%Y-\%m-\%d_\%H:\%M:\%S).csv"
+*/5 * * * * /home/stakepool/solana-program-library/target/release/spl-stake-pool distribute-stake GUAMR8ciiaijraJeLDEDrFVaueLm9YzWWY9R7CBPL9rA --consume-liquidity 120 --threshold 10 --slots-before-epoch-end 2400 >>/home/stakepool/cron/distribute-stake.log 2>&1
