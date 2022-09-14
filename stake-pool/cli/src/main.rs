@@ -2195,6 +2195,7 @@ fn command_dao_strategy_deposit_sol(
     pool_token_receiver_account: &Option<Pubkey>,
     referrer_address: &Option<Pubkey>,
     amount: f64,
+    use_old_referral_program: bool,
 ) -> CommandResult {
     if !config.no_update {
         command_update(config, stake_pool_address, false, false)?;
@@ -2340,27 +2341,49 @@ fn command_dao_strategy_deposit_sol(
         }
 
         if let Some(referrer_address) = referrer_address {
-            spl_stake_pool::instruction::dao_strategy_deposit_sol_with_authority_and_referrer(
-                &spl_stake_pool::id(),
-                stake_pool_address,
-                &deposit_authority.pubkey(),
-                &pool_withdraw_authority,
-                &stake_pool.reserve_stake,
-                &user_sol_transfer.pubkey(),
-                &pool_token_receiver_account,
-                &dao_community_token_receiver_account,
-                &stake_pool.manager_fee_account,
-                &referrer_address,
-                &referrer_list_address,
-                &metrics_deposit_referrer_pubkey,
-                &metrics_deposit_referrer_counter_pubkey,
-                &stake_pool.pool_mint,
-                &spl_token::id(),
-                &community_token_staking_rewards_dto_pubkey,
-                &from_pubkey,
-                &community_token_dto_pubkey,
-                amount,
-            )
+            if use_old_referral_program {
+                spl_stake_pool::instruction::dao_strategy_deposit_sol_with_authority_and_referrer(
+                    &spl_stake_pool::id(),
+                    stake_pool_address,
+                    &deposit_authority.pubkey(),
+                    &pool_withdraw_authority,
+                    &stake_pool.reserve_stake,
+                    &user_sol_transfer.pubkey(),
+                    &pool_token_receiver_account,
+                    &dao_community_token_receiver_account,
+                    &stake_pool.manager_fee_account,
+                    &referrer_address,
+                    &referrer_list_address,
+                    &metrics_deposit_referrer_pubkey,
+                    &metrics_deposit_referrer_counter_pubkey,
+                    &stake_pool.pool_mint,
+                    &spl_token::id(),
+                    &community_token_staking_rewards_dto_pubkey,
+                    &from_pubkey,
+                    &community_token_dto_pubkey,
+                    amount,
+                )
+            } else {
+                spl_stake_pool::instruction::dao_strategy_deposit_sol_with_authority_and_referrer2(
+                    &spl_stake_pool::id(),
+                    stake_pool_address,
+                    &deposit_authority.pubkey(),
+                    &pool_withdraw_authority,
+                    &stake_pool.reserve_stake,
+                    &user_sol_transfer.pubkey(),
+                    &pool_token_receiver_account,
+                    &dao_community_token_receiver_account,
+                    &stake_pool.manager_fee_account,
+                    &referrer_address,
+                    &referrer_list_address,
+                    &stake_pool.pool_mint,
+                    &spl_token::id(),
+                    &community_token_staking_rewards_dto_pubkey,
+                    &from_pubkey,
+                    &community_token_dto_pubkey,
+                    amount,
+                )                
+            }
         } else {
             spl_stake_pool::instruction::dao_strategy_deposit_sol_with_authority(
                 &spl_stake_pool::id(),
@@ -2382,26 +2405,47 @@ fn command_dao_strategy_deposit_sol(
         }
     } else {
         if let Some(referrer_address) = referrer_address {
-            spl_stake_pool::instruction::dao_strategy_deposit_sol_with_referrer(
-                &spl_stake_pool::id(),
-                stake_pool_address,
-                &pool_withdraw_authority,
-                &stake_pool.reserve_stake,
-                &user_sol_transfer.pubkey(),
-                &pool_token_receiver_account,
-                &dao_community_token_receiver_account,
-                &stake_pool.manager_fee_account,
-                &referrer_address,
-                &referrer_list_address,
-                &metrics_deposit_referrer_pubkey,
-                &metrics_deposit_referrer_counter_pubkey,
-                &stake_pool.pool_mint,
-                &spl_token::id(),
-                &community_token_staking_rewards_dto_pubkey,
-                &from_pubkey,
-                &community_token_dto_pubkey,
-                amount,
-            )
+            if use_old_referral_program {
+                spl_stake_pool::instruction::dao_strategy_deposit_sol_with_referrer(
+                    &spl_stake_pool::id(),
+                    stake_pool_address,
+                    &pool_withdraw_authority,
+                    &stake_pool.reserve_stake,
+                    &user_sol_transfer.pubkey(),
+                    &pool_token_receiver_account,
+                    &dao_community_token_receiver_account,
+                    &stake_pool.manager_fee_account,
+                    &referrer_address,
+                    &referrer_list_address,
+                    &metrics_deposit_referrer_pubkey,
+                    &metrics_deposit_referrer_counter_pubkey,
+                    &stake_pool.pool_mint,
+                    &spl_token::id(),
+                    &community_token_staking_rewards_dto_pubkey,
+                    &from_pubkey,
+                    &community_token_dto_pubkey,
+                    amount,
+                )
+            } else {
+                spl_stake_pool::instruction::dao_strategy_deposit_sol_with_referrer2(
+                    &spl_stake_pool::id(),
+                    stake_pool_address,
+                    &pool_withdraw_authority,
+                    &stake_pool.reserve_stake,
+                    &user_sol_transfer.pubkey(),
+                    &pool_token_receiver_account,
+                    &dao_community_token_receiver_account,
+                    &stake_pool.manager_fee_account,
+                    &referrer_address,
+                    &referrer_list_address,
+                    &stake_pool.pool_mint,
+                    &spl_token::id(),
+                    &community_token_staking_rewards_dto_pubkey,
+                    &from_pubkey,
+                    &community_token_dto_pubkey,
+                    amount,
+                )
+            }
         } else {
             spl_stake_pool::instruction::dao_strategy_deposit_sol(
                 &spl_stake_pool::id(),
@@ -6154,6 +6198,13 @@ fn main() {
                     .help("Account to receive the referral fees for deposits. \
                           Defaults to the token receiver."),
             )
+            .arg(
+                Arg::with_name("use-old-referral-program")
+                    .long("use-old-referral-program")
+                    .takes_value(false)
+                    .requires("referer")
+                    .help("Use old referral program (v1) which applies to deposit fee"),
+            )
         )
         .subcommand(SubCommand::with_name("dao-strategy-deposit-stake")
             .about("Deposit active stake account into the stake pool in exchange for pool tokens with existing DAO`s community tokens strategy.")
@@ -6936,6 +6987,7 @@ fn main() {
             let referrer: Option<Pubkey> = pubkey_of(arg_matches, "referrer");
             let from = keypair_of(arg_matches, "from");
             let amount = value_t_or_exit!(arg_matches, "amount", f64);
+            let use_old_referral_program = arg_matches.is_present("use-old-referral-program");
             command_dao_strategy_deposit_sol(
                 &config,
                 &stake_pool_address,
@@ -6943,6 +6995,7 @@ fn main() {
                 &pool_token_receiver,
                 &referrer,
                 amount,
+                use_old_referral_program,
             )
         }
         ("dao-strategy-deposit-stake", Some(arg_matches)) => {
