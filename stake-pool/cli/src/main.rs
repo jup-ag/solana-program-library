@@ -4710,36 +4710,17 @@ fn command_dao_strategy_distribute_community_tokens(
     config: &Config,
     stake_pool_address: &Pubkey,
 ) -> CommandResult {
-    let dao_state_dto_pubkey = DaoState::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let dao_state_dto_account = config
-        .rpc_client
-        .get_account(&dao_state_dto_pubkey)?;
-
-    let dao_state = try_from_slice_unchecked::<DaoState>(dao_state_dto_account.data.as_slice())?;
-    if !dao_state.is_enabled {
+    if !get_dao_state(&config.rpc_client, stake_pool_address)? {
         return Err("Logic error: DAO is not enabled for the pool yet. You should enable it firstly.".into());
     }
-
     let community_token_dto_pubkey = CommunityToken::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let community_token_dto_account = config
-        .rpc_client
-        .get_account(&community_token_dto_pubkey)?;
-    let community_token = try_from_slice_unchecked::<CommunityToken>(community_token_dto_account.data.as_slice())?;
+    let community_token = CommunityToken::get(&config.rpc_client, stake_pool_address)?;
 
     let community_tokens_counter_dto_pubkey = CommunityTokensCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let community_tokens_counter_dto_account = config
-        .rpc_client
-        .get_account(&community_tokens_counter_dto_pubkey)?;
-    let community_tokens_counter = try_from_slice_unchecked::<CommunityTokensCounter>(community_tokens_counter_dto_account.data.as_slice())?;    
+    let community_tokens_counter = CommunityTokensCounter::get(&config.rpc_client, stake_pool_address)?;
 
-    let community_token_staking_rewards_counter_dto_pubkey = CommunityTokenStakingRewardsCounter::find_address(&spl_stake_pool::id(), stake_pool_address).0;
-    let community_token_staking_rewards_counter_dto_account = config
-        .rpc_client
-        .get_account(&community_token_staking_rewards_counter_dto_pubkey)?;
-    let community_token_staking_rewards_counter = try_from_slice_unchecked::<CommunityTokenStakingRewardsCounter>(community_token_staking_rewards_counter_dto_account.data.as_slice())?;
-
+    let community_token_staking_rewards_counter = CommunityTokenStakingRewardsCounter::get(&config.rpc_client, stake_pool_address)?;
     let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
-
     let pool_withdraw_authority = find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
 
     let mut instructions: Vec<Instruction> = vec![]; 
@@ -4786,14 +4767,21 @@ fn command_dao_strategy_distribute_community_tokens(
 
                 instructions.clear();
             }
-
             let community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&account.data[..])?;
 
             let associated_pool_token_address = get_associated_token_address(community_token_staking_rewards.get_owner_wallet(), &stake_pool.pool_mint);
-            let associated_token_account = config.rpc_client.get_token_account(&associated_pool_token_address)?.unwrap();
+            let associated_token_account_res = config.rpc_client.get_token_account(&associated_pool_token_address);
+
+            if let Err(error) = associated_token_account_res {
+                eprintln!("Skipping {} wallet due to the following error {}", community_token_staking_rewards.get_owner_wallet(), error);
+                continue
+            }
+            let associated_token_account = associated_token_account_res?.unwrap();
+
             if associated_token_account.mint != stake_pool.pool_mint.to_string()
                 || associated_token_account.owner != community_token_staking_rewards.get_owner_wallet().to_string() {
-                return Err("Invalid ATA parameters".into());
+                    eprintln!("Invalid ATA parameters");
+                    continue
             }
         
             let pool_tokens_amount = spl_token::ui_amount_to_amount(associated_token_account.token_amount.ui_amount.unwrap(), associated_token_account.token_amount.decimals) as f64;
@@ -4827,7 +4815,10 @@ fn command_dao_strategy_distribute_community_tokens(
                                 )
                             )
                         }
-                        None => return Err("Couldn't calcualate how many community tokens should be minted".into()),
+                        None => {
+                            eprintln!("Couldn't calcualate how many community tokens should be minted");
+                            continue
+                        },
                     }
                 }
             } else {
@@ -4844,12 +4835,12 @@ fn command_dao_strategy_distribute_community_tokens(
                         )
                     )
                 } else {
-                    return Err("Pool amount cannot be a negative number".into());
+                    eprintln!("Pool amount cannot be a negative number");
+                    continue
                 }
             }
         }
     }
-
     if instructions.len() != 0 {
         let mut transaction = Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
         let recent_blockhash = config.rpc_client.get_recent_blockhash()?.0;
