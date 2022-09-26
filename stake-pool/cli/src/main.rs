@@ -2688,7 +2688,12 @@ fn command_update(
 
     for stake_key in &stake_accounts {
         if *stake_key != stake_pool.reserve_stake {
-            let stake_state = get_stake_state(&config.rpc_client, stake_key)?;
+            let stake_state = get_stake_state(&config.rpc_client, stake_key);
+            if let Err(e) = stake_state {
+                println!("Ignoring: can't get stake state for {} due to the following error: {}", stake_key, e);
+                continue;
+            }
+            let stake_state = stake_state.unwrap();
             match stake_state {
                 stake::state::StakeState::Uninitialized
                 | stake::state::StakeState::RewardsPool => {
