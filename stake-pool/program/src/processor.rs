@@ -2887,6 +2887,43 @@ impl Processor {
         Ok(())
     }
 
+    /// Changes the StakePool treasury fee account.
+    /// Сan only be performed by the StakePool manager.
+    ///
+    /// Processes [SetTreasuryFeeAccount](enum.Instruction.html).
+    #[inline(never)] // needed to avoid stack size violation
+    fn process_set_treasury_fee_account(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let stake_pool_info = next_account_info(account_info_iter)?;
+        let treasury_fee_account_info = next_account_info(account_info_iter)?;
+        let manager_info = next_account_info(account_info_iter)?;
+
+        check_account_owner(stake_pool_info, program_id)?;
+        let mut stake_pool = try_from_slice_unchecked::<StakePool>(&stake_pool_info.data.borrow())?;
+        if !stake_pool.is_valid() {
+            return Err(StakePoolError::InvalidState.into());
+        }
+        stake_pool.check_manager(manager_info)?;
+
+        let treasury_fee = spl_token::state::Account::unpack_from_slice(&treasury_fee_account_info.data.borrow())?;
+        if treasury_fee.owner != *manager_info.key {
+            return Err(ProgramError::IllegalOwner.into());
+        }
+        if stake_pool.pool_mint
+            != treasury_fee
+            .mint
+        {
+            return Err(StakePoolError::WrongAccountMint.into());
+        }
+
+        stake_pool.treasury_fee_account = *treasury_fee_account_info.key;
+        stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
+        Ok(())
+    }
+
     /// Changes the StakePool staker.
     /// Сan only be performed by the StakePool manager or staker.
     /// 
@@ -5790,7 +5827,11 @@ impl Processor {
             StakePoolInstruction::SetNoFeeDepositThreshold(no_fee_deposit_threshold) => {
                 msg!("Instruction: SetNoFeeDepositThreshold");
                 Self::process_set_no_fee_deposit_threshold(program_id, accounts, no_fee_deposit_threshold)
-            }       
+            }
+            StakePoolInstruction::SetTreasuryFeeAccount() => {
+                msg!("Instruction: SetTreasuryFeeAccount");
+                Self::process_set_treasury_fee_account(program_id, accounts)
+            }
         }
     }
 }

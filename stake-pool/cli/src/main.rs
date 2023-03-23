@@ -3832,6 +3832,51 @@ fn command_set_no_fee_deposit_threshold(
     Ok(())
 }
 
+fn command_set_treasury_fee_account(
+    config: &Config,
+    stake_pool_address: &Pubkey,
+) -> CommandResult {
+    let treasury_keypair = Keypair::new();
+    println!("Creating treasury {}", treasury_keypair.pubkey());
+
+    let token_account_rent_exempt = config
+        .rpc_client
+        .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?;
+
+    let mut signers = vec![config.fee_payer.as_ref(), config.manager.as_ref(), &treasury_keypair];
+    unique_signers!(signers);
+
+    let stake_pool = get_stake_pool(&config.rpc_client, stake_pool_address)?;
+    let transaction = checked_transaction_with_signers(
+        config,
+        &[
+            // Create treasury account
+            system_instruction::create_account(
+                &config.fee_payer.pubkey(),
+                &treasury_keypair.pubkey(),
+                token_account_rent_exempt,
+                spl_token::state::Account::LEN as u64,
+                &spl_token::id(),
+            ),
+            // Initialize treasury account as token account
+            spl_token::instruction::initialize_account(
+                &spl_token::id(),
+                &treasury_keypair.pubkey(),
+                &stake_pool.pool_mint,
+                &config.manager.pubkey(),
+            )?,
+            spl_stake_pool::instruction::set_treasury_fee_account(
+            &spl_stake_pool::id(),
+            stake_pool_address,
+            &treasury_keypair.pubkey(),
+            &config.manager.pubkey(),
+        )],
+        &signers,
+    )?;
+    send_transaction(config, transaction)?;
+    Ok(())
+}
+
 fn command_list_all_pools(config: &Config) -> CommandResult {
     let all_pools = get_stake_pools(&config.rpc_client)?;
     let cli_stake_pool_vec: Vec<CliStakePool> =
@@ -6520,6 +6565,18 @@ fn main() {
                     .help("No fee deposit threshold."),
             )
         )
+        .subcommand(SubCommand::with_name("set-treasury-fee-account")
+            .about("Set or update treasury-fee-account. Must be signed by the manager.")
+            .arg(
+                Arg::with_name("pool")
+                    .index(1)
+                    .validator(is_pubkey)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Stake pool address."),
+            )
+        )
         .subcommand(SubCommand::with_name("dao-strategy-mint-extra-community-tokens")
             .about("Mint extra community tokens for those users who didn't receive them by mistake")
             .arg(
@@ -7125,6 +7182,10 @@ fn main() {
             let threshold = value_t_or_exit!(arg_matches, "threshold", u16);
 
             command_set_no_fee_deposit_threshold(&config, &stake_pool_address, threshold)
+        }
+        ("set-treasury-fee-account", Some(arg_matches)) => {
+            let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();
+            command_set_treasury_fee_account(&config, &stake_pool_address)
         }
         ("dao-strategy-mint-extra-community-tokens", Some(arg_matches)) => {
             let stake_pool_address = pubkey_of(arg_matches, "pool").unwrap();

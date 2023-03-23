@@ -745,6 +745,15 @@ pub enum StakePoolInstruction {
     //
     // Index 39 
     DaoStrategyDepositSolWithReferrer2(u64),
+
+    /// (Manager only) Treasury fee account
+    ///
+    ///  0. `[w]` StakePool
+    ///  1. `[r]` TreasuryFeeAccount
+    ///  2. `[s]` Manager
+    ///
+    /// userdata: threshold
+    SetTreasuryFeeAccount(),
 }
 
 /// Creates an 'initialize' instruction.
@@ -1639,6 +1648,25 @@ pub fn set_no_fee_deposit_threshold(
         data: StakePoolInstruction::SetNoFeeDepositThreshold(
             no_fee_deposit_threshold
         ).try_to_vec().unwrap(),
+    }
+}
+
+/// Creates a 'set treasury fee account' instruction.
+pub fn set_treasury_fee_account(
+    program_id: &Pubkey,
+    stake_pool: &Pubkey,
+    treasury_fee_account: &Pubkey,
+    manager: &Pubkey,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(*stake_pool, false),
+        AccountMeta::new_readonly(*treasury_fee_account, false),
+        AccountMeta::new_readonly(*manager, true),
+    ];
+    Instruction {
+        program_id: *program_id,
+        accounts,
+        data: StakePoolInstruction::SetTreasuryFeeAccount().try_to_vec().unwrap(),
     }
 }
 
