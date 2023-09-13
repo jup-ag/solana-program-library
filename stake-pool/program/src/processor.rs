@@ -7,10 +7,11 @@ use {
         instruction::{FundingType, PreferredValidatorType, StakePoolInstruction},
         minimum_reserve_lamports, minimum_stake_lamports,
         state::{
-            AccountType, Fee, FeeType, RateOfExchange, StakePool, StakeStatus, ValidatorList,
-            ValidatorListHeader, ValidatorStakeInfo, SimplePda, CommunityToken, DaoState, CommunityTokenStakingRewards, 
-            NetworkAccountType, CommunityTokenStakingRewardsCounter, CommunityTokensCounter, 
-            ReferrerList, ReferrerListHeader, Referrer, MetricsDepositReferrer, MetricsDepositReferrerCounter,
+            AccountType, CommunityToken, CommunityTokenStakingRewards,
+            CommunityTokenStakingRewardsCounter, CommunityTokensCounter, DaoState, Fee, FeeType,
+            MetricsDepositReferrer, MetricsDepositReferrerCounter, NetworkAccountType,
+            RateOfExchange, Referrer, ReferrerList, ReferrerListHeader, SimplePda, StakePool,
+            StakeStatus, ValidatorList, ValidatorListHeader, ValidatorStakeInfo,
         },
         AUTHORITY_DEPOSIT, AUTHORITY_WITHDRAW, MINIMUM_ACTIVE_STAKE, TRANSIENT_STAKE_SEED_PREFIX,
     },
@@ -19,8 +20,8 @@ use {
     solana_program::{
         account_info::next_account_info,
         account_info::AccountInfo,
-        borsh::try_from_slice_unchecked,
         borsh::get_instance_packed_len,
+        borsh::try_from_slice_unchecked,
         clock::{Clock, Epoch},
         decode_error::DecodeError,
         entrypoint::ProgramResult,
@@ -35,12 +36,9 @@ use {
         stake, system_instruction, system_program,
         sysvar::Sysvar,
     },
-    spl_token::state::Mint,
     spl_associated_token_account::get_associated_token_address,
-    spl_token_2022::{
-        extension::StateWithExtensions,
-        state::Account,
-    },
+    spl_token::state::Mint,
+    spl_token_2022::{extension::StateWithExtensions, state::Account},
 };
 
 /// Minimum deposit
@@ -226,9 +224,6 @@ fn create_pda_account<'a>(
         )
     }
 }
-
-
-
 
 /// Program state handler.
 pub struct Processor {}
@@ -555,9 +550,9 @@ impl Processor {
         invoke(&ix, &[source, destination, system_program])
     }
 
-    /// Сreates and initializes the StakePool structure. 
+    /// Сreates and initializes the StakePool structure.
     /// The rate of exchange is initially None, which means that the exchange goes like 1:1.
-    /// 
+    ///
     /// Processes `Initialize` instruction.
     #[allow(clippy::too_many_arguments)]
     #[inline(never)] // needed due to stack size violation
@@ -793,7 +788,8 @@ impl Processor {
         stake_pool.treasury_fee_account = *treasury_fee_info.key;
         stake_pool.treasury_fee = treasury_fee;
         stake_pool.total_lamports_liquidity = 0;
-        stake_pool.max_validator_yield_per_epoch_numerator = StakePool::DEFAULT_VALIDATOR_YIELD_PER_EPOCH_NUMERATOR;
+        stake_pool.max_validator_yield_per_epoch_numerator =
+            StakePool::DEFAULT_VALIDATOR_YIELD_PER_EPOCH_NUMERATOR;
         stake_pool.no_fee_deposit_threshold = no_fee_deposit_threshold;
 
         let pool_tokens_minted = stake_pool
@@ -821,7 +817,7 @@ impl Processor {
 
     /// Adds a validator to the StakePool, storing the validator data in a ValidatorList
     /// Сan only be performed by the StakePool staker.
-    /// 
+    ///
     /// Processes `AddValidatorToPool` instruction.
     #[inline(never)] // needed due to stack size violation
     fn process_add_validator_to_pool(
@@ -958,7 +954,7 @@ impl Processor {
     /// Removes a validator from the StakePOool by removing it from the ValidatorList
     /// Before deleting a validator, it must have the required minimum funds but no more.
     /// Сan only be performed by the StakePool staker.
-    /// 
+    ///
     /// Processes `RemoveValidatorFromPool` instruction.
     #[inline(never)] // needed due to stack size violation
     fn process_remove_validator_from_pool(
@@ -1119,7 +1115,7 @@ impl Processor {
 
     /// Removes the stake from the validator stake account and forwards it to the StakePool reserve stake account
     /// Сan only be performed by the StakePool staker.
-    /// 
+    ///
     /// Processes `DecreaseValidatorStake` instruction.
     #[inline(never)] // needed due to stack size violation
     fn process_decrease_validator_stake(
@@ -1275,7 +1271,7 @@ impl Processor {
 
     /// Adds a stake to the validator stake account from StakePool reserve stake account
     /// Сan only be performed by the StakePool staker.
-    /// 
+    ///
     /// Processes `IncreaseValidatorStake` instruction.
     #[inline(never)] // needed due to stack size violation
     fn process_increase_validator_stake(
@@ -1375,14 +1371,14 @@ impl Processor {
 
         // it's up to the manager if they want to use liquidity sols.
         // TODO: remove this snippet
-/*
-        if let None = reserve_stake_account_info
-            .lamports()
-            .saturating_sub(stake_rent)
-            .checked_sub(stake_pool.total_lamports_liquidity) {
-            return Err(StakePoolError::SolLessThanLiquiditySol.into());
-        }
-*/
+        /*
+                if let None = reserve_stake_account_info
+                    .lamports()
+                    .saturating_sub(stake_rent)
+                    .checked_sub(stake_pool.total_lamports_liquidity) {
+                    return Err(StakePoolError::SolLessThanLiquiditySol.into());
+                }
+        */
 
         if lamports < MINIMUM_ACTIVE_STAKE {
             msg!(
@@ -1396,16 +1392,11 @@ impl Processor {
         // the stake account rent exemption is withdrawn after the merge, so
         let total_lamports = lamports.saturating_add(stake_rent);
 
-        let reserve_stake_account_lamports = reserve_stake_account_info
-            .lamports();
+        let reserve_stake_account_lamports = reserve_stake_account_info.lamports();
         //    .saturating_sub(stake_pool.total_lamports_liquidity);
-        
-        if reserve_stake_account_lamports
-            .saturating_sub(total_lamports)
-            <= stake_rent
-        {
-            let max_split_amount = reserve_stake_account_lamports
-                .saturating_sub(2 * stake_rent);
+
+        if reserve_stake_account_lamports.saturating_sub(total_lamports) <= stake_rent {
+            let max_split_amount = reserve_stake_account_lamports.saturating_sub(2 * stake_rent);
             msg!(
                 "Reserve stake does not have enough lamports for increase, must be less than {}, {} requested",
                 max_split_amount,
@@ -1452,7 +1443,7 @@ impl Processor {
 
     /// Sets the preferred validator. This validator can be used for stake deposits and stake withdrawals
     /// Сan only be performed by the StakePool staker.
-    /// 
+    ///
     /// Process `SetPreferredValidator` instruction
     #[inline(never)] // needed due to stack size violation
     fn process_set_preferred_validator(
@@ -1516,11 +1507,11 @@ impl Processor {
         Ok(())
     }
 
-    /// Updates information about the validators stored in the ValidatorList. 
-    /// Information, as a rule, changes at the moment of the onset of a new epoch. 
+    /// Updates information about the validators stored in the ValidatorList.
+    /// Information, as a rule, changes at the moment of the onset of a new epoch.
     /// Preferably, use this method 1 time from the very beginning of a new epoch.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes `UpdateValidatorListBalance` instruction.
     #[inline(always)] // needed to maximize number of validators
     fn process_update_validator_list_balance(
@@ -1779,10 +1770,10 @@ impl Processor {
     }
 
     /// Updates the information stored in the StakePool structure.
-    /// You must use this method at the beginning of each epoch after updating the information about the validators stored in the ValidatorList. 
+    /// You must use this method at the beginning of each epoch after updating the information about the validators stored in the ValidatorList.
     /// If you do not update information about the StakePool, then many APIs will not work.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes `UpdateStakePoolBalance` instruction.
     #[inline(always)] // needed to optimize number of validators
     fn process_update_stake_pool_balance(
@@ -1799,7 +1790,7 @@ impl Processor {
         let manager_fee_info = next_account_info(account_info_iter)?;
         let pool_mint_info = next_account_info(account_info_iter)?;
         let treasury_fee_info = next_account_info(account_info_iter)?;
-        let token_program_info = next_account_info(account_info_iter)?;     
+        let token_program_info = next_account_info(account_info_iter)?;
 
         let clock = Clock::get()?;
 
@@ -1864,8 +1855,8 @@ impl Processor {
             msg!("reward lamports: {}", reward_lamports);
 
             let epoch_fee = stake_pool
-                    .calc_pool_tokens_epoch_fee(reward_lamports)
-                    .ok_or(StakePoolError::CalculationFailure)?;
+                .calc_pool_tokens_epoch_fee(reward_lamports)
+                .ok_or(StakePoolError::CalculationFailure)?;
             if epoch_fee > 0 {
                 Self::token_mint_to(
                     stake_pool_info.key,
@@ -1916,9 +1907,10 @@ impl Processor {
             let pool_mint = Mint::unpack_from_slice(&pool_mint_info.data.borrow())?;
             stake_pool.pool_token_supply = pool_mint.supply;
 
-            stake_pool.rate_of_exchange = if stake_pool.total_lamports == stake_pool.pool_token_supply
-            || stake_pool.pool_token_supply == 0
-            || stake_pool.total_lamports == 0
+            stake_pool.rate_of_exchange = if stake_pool.total_lamports
+                == stake_pool.pool_token_supply
+                || stake_pool.pool_token_supply == 0
+                || stake_pool.total_lamports == 0
             {
                 None
             } else {
@@ -1928,7 +1920,8 @@ impl Processor {
                 })
             };
 
-            stake_pool.max_validator_yield_per_epoch_numerator = max_validator_yield_per_epoch_numerator;
+            stake_pool.max_validator_yield_per_epoch_numerator =
+                max_validator_yield_per_epoch_numerator;
             stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
         }
 
@@ -1937,7 +1930,7 @@ impl Processor {
 
     /// Removes validators from the ValidatorList that were candidates for removal.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes the `CleanupRemovedValidatorEntries` instruction
     #[inline(never)] // needed to avoid stack size violation
     fn process_cleanup_removed_validator_entries(
@@ -1954,7 +1947,7 @@ impl Processor {
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
-        
+
         stake_pool.check_manager(manager_info)?;
         stake_pool.check_validator_list(validator_list_info)?;
 
@@ -1973,7 +1966,7 @@ impl Processor {
 
     /// Makes a deposit of a user stake in the StakePull validator, giving back
     /// the number of tokens calculated according to a specific strategy.
-    /// 
+    ///
     /// Processes [DepositStake](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_deposit_stake(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
@@ -2122,18 +2115,21 @@ impl Processor {
 
         let new_pool_tokens = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(
-                stake_pool.calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
-                    .ok_or(StakePoolError::CalculationFailure)?
+                stake_pool
+                    .calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
+                    .ok_or(StakePoolError::CalculationFailure)?,
             )
             .ok_or(StakePoolError::CalculationFailure)?;
 
-        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
-            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < stake_deposit_lamports
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0
+            && native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+                < stake_deposit_lamports
         {
-            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
-                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
-            )
-            .ok_or(StakePoolError::CalculationFailure)?
+            stake_pool
+                .convert_amount_of_lamports_to_amount_of_pool_tokens(native_token::sol_to_lamports(
+                    stake_pool.no_fee_deposit_threshold as f64,
+                ))
+                .ok_or(StakePoolError::CalculationFailure)?
         } else {
             stake_pool
                 .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
@@ -2161,15 +2157,15 @@ impl Processor {
         // we don't support the default referral program
         let pool_tokens_referral_fee = 0;
         let pool_tokens_manager_deposit_fee = total_fee;
-/*
-        let pool_tokens_referral_fee = stake_pool
-            .calc_pool_tokens_stake_referral_fee(total_fee)
-            .ok_or(StakePoolError::CalculationFailure)?;
+        /*
+                let pool_tokens_referral_fee = stake_pool
+                    .calc_pool_tokens_stake_referral_fee(total_fee)
+                    .ok_or(StakePoolError::CalculationFailure)?;
 
-        let pool_tokens_manager_deposit_fee = total_fee
-            .checked_sub(pool_tokens_referral_fee)
-            .ok_or(StakePoolError::CalculationFailure)?;
-*/
+                let pool_tokens_manager_deposit_fee = total_fee
+                    .checked_sub(pool_tokens_referral_fee)
+                    .ok_or(StakePoolError::CalculationFailure)?;
+        */
         if pool_tokens_user
             .saturating_add(pool_tokens_manager_deposit_fee)
             .saturating_add(pool_tokens_referral_fee)
@@ -2254,9 +2250,9 @@ impl Processor {
         Ok(())
     }
 
-    /// Makes a deposit of a user sol in the StakePull reserve stake account, giving back 
+    /// Makes a deposit of a user sol in the StakePull reserve stake account, giving back
     /// the number of tokens calculated according to a specific strategy.
-    /// 
+    ///
     /// Processes [DepositSol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_deposit_sol(
@@ -2309,19 +2305,22 @@ impl Processor {
         let new_pool_tokens_wo_idle_fee = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
-        
-        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
-            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < deposit_lamports
+
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0
+            && native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+                < deposit_lamports
         {
-            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
-                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
-            )
-            .ok_or(StakePoolError::CalculationFailure)?
+            stake_pool
+                .convert_amount_of_lamports_to_amount_of_pool_tokens(native_token::sol_to_lamports(
+                    stake_pool.no_fee_deposit_threshold as f64,
+                ))
+                .ok_or(StakePoolError::CalculationFailure)?
         } else {
             new_pool_tokens_wo_idle_fee
         };
 
-        let new_pool_tokens = stake_pool.calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
+        let new_pool_tokens = stake_pool
+            .calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         if new_pool_tokens == 0 {
@@ -2338,14 +2337,14 @@ impl Processor {
         // we don't support the default referral program
         let pool_tokens_referral_fee = 0;
         let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee;
-/*            
-        let pool_tokens_referral_fee = stake_pool
-            .calc_pool_tokens_sol_referral_fee(pool_tokens_sol_deposit_fee)
-            .ok_or(StakePoolError::CalculationFailure)?;
-        let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee
-            .checked_sub(pool_tokens_referral_fee)
-            .ok_or(StakePoolError::CalculationFailure)?;
-*/
+        /*
+                let pool_tokens_referral_fee = stake_pool
+                    .calc_pool_tokens_sol_referral_fee(pool_tokens_sol_deposit_fee)
+                    .ok_or(StakePoolError::CalculationFailure)?;
+                let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee
+                    .checked_sub(pool_tokens_referral_fee)
+                    .ok_or(StakePoolError::CalculationFailure)?;
+        */
         if pool_tokens_user
             .saturating_add(pool_tokens_manager_deposit_fee)
             .saturating_add(pool_tokens_referral_fee)
@@ -2415,9 +2414,9 @@ impl Processor {
         Ok(())
     }
 
-    /// Moves the stake from the validator to user stake account and 
+    /// Moves the stake from the validator to user stake account and
     /// burns the tokens according to a specific strategy.
-    /// 
+    ///
     /// Processes [WithdrawStake](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_withdraw_stake(
@@ -2652,9 +2651,9 @@ impl Processor {
         Ok(())
     }
 
-    /// Moves the sol from StakePool reserve stake account to user wallet and 
+    /// Moves the sol from StakePool reserve stake account to user wallet and
     /// burns the tokens according to a specific strategy.
-    /// 
+    ///
     /// Processes [WithdrawSol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_withdraw_sol(
@@ -2787,7 +2786,7 @@ impl Processor {
 
     /// Changes the StakePool manager.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [SetManager](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_set_manager(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
@@ -2825,7 +2824,7 @@ impl Processor {
 
     /// Changes the StakePool fee of different kind.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [SetFee](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_set_fee(
@@ -2855,10 +2854,9 @@ impl Processor {
         Ok(())
     }
 
-    
     /// Changes the StakePool no fee deposit threshold.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [SetNoFeeDepositThreshold](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_set_no_fee_deposit_threshold(
@@ -2908,14 +2906,12 @@ impl Processor {
         }
         stake_pool.check_manager(manager_info)?;
 
-        let treasury_fee = spl_token::state::Account::unpack_from_slice(&treasury_fee_account_info.data.borrow())?;
+        let treasury_fee =
+            spl_token::state::Account::unpack_from_slice(&treasury_fee_account_info.data.borrow())?;
         if treasury_fee.owner != *manager_info.key {
             return Err(ProgramError::IllegalOwner.into());
         }
-        if stake_pool.pool_mint
-            != treasury_fee
-            .mint
-        {
+        if stake_pool.pool_mint != treasury_fee.mint {
             return Err(StakePoolError::WrongAccountMint.into());
         }
 
@@ -2926,7 +2922,7 @@ impl Processor {
 
     /// Changes the StakePool staker.
     /// Сan only be performed by the StakePool manager or staker.
-    /// 
+    ///
     /// Processes [SetStaker](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_set_staker(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
@@ -2953,7 +2949,7 @@ impl Processor {
 
     /// Changes the StakePool funding authority.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [SetFundingAuthority](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_set_funding_authority(
@@ -2988,11 +2984,11 @@ impl Processor {
         Ok(())
     }
 
-    /// Makes a deposit of sols that will provide liquidity to the pool for "instant unstake" 
-    /// (withdrawal from reserve stake account). Sols for liquidity do not participate in the 
-    /// formation of rate of exchange and similar mechanisms. 
+    /// Makes a deposit of sols that will provide liquidity to the pool for "instant unstake"
+    /// (withdrawal from reserve stake account). Sols for liquidity do not participate in the
+    /// formation of rate of exchange and similar mechanisms.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [DepositLiquiditySol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_deposit_liquidity_sol(
@@ -3050,10 +3046,10 @@ impl Processor {
 
         Ok(())
     }
-    
+
     /// Moves sols for liquidity from reserve stake account to manager wallet.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [WithdrawLiquiditySol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_withdraw_liquidity_sol(
@@ -3091,7 +3087,7 @@ impl Processor {
         stake_pool.check_reserve_stake(reserve_stake_account_info)?;
         stake_pool.check_manager(manager_info)?;
         check_stake_program(stake_program_info.key)?;
-        
+
         if withdraw_lamports > stake_pool.total_lamports_liquidity {
             return Err(StakePoolError::LiquiditySolWithdrawalTooLargeAtAll.into());
         }
@@ -3100,10 +3096,11 @@ impl Processor {
         if let None = reserve_stake_account_info
             .lamports()
             .saturating_sub(stake_rent)
-            .checked_sub(withdraw_lamports) {
+            .checked_sub(withdraw_lamports)
+        {
             return Err(StakePoolError::LiquiditySolWithdrawalTooLargeAtTime.into());
         }
- 
+
         Self::stake_withdraw(
             stake_pool_info.key,
             reserve_stake_account_info.clone(),
@@ -3129,7 +3126,7 @@ impl Processor {
 
     /// Creates account for storing CommunityToken structure.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [CreateCommunityToken](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_community_token(
@@ -3156,30 +3153,29 @@ impl Processor {
         }
         stake_pool.check_manager(manager_info)?;
 
-        let (community_token_pubkey, bump_seed) = CommunityToken::find_address(program_id, stake_pool_info.key);
+        let (community_token_pubkey, bump_seed) =
+            CommunityToken::find_address(program_id, stake_pool_info.key);
         if *community_token_dto_info.key != community_token_pubkey
-            || *dao_state_dto_info.key != DaoState::find_address(program_id, stake_pool_info.key).0 {
+            || *dao_state_dto_info.key != DaoState::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if !community_token_dto_info.data_is_empty() 
-            || community_token_dto_info.lamports() != 0 {
+        if !community_token_dto_info.data_is_empty() || community_token_dto_info.lamports() != 0 {
             return Err(StakePoolError::DataAlreadyExists.into());
         }
-        
-        if dao_state_dto_info.data_is_empty() 
-            || dao_state_dto_info.lamports() == 0 {
+
+        if dao_state_dto_info.data_is_empty() || dao_state_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
         let rent = &Rent::from_account_info(rent_info)?;
 
-        let mut dao_state = try_from_slice_unchecked::<DaoState>(&dao_state_dto_info.data.borrow())?;
+        let mut dao_state =
+            try_from_slice_unchecked::<DaoState>(&dao_state_dto_info.data.borrow())?;
         dao_state.is_enabled = true;
         dao_state.serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
 
-        let community_token = CommunityToken {
-            token_mint
-        };
+        let community_token = CommunityToken { token_mint };
 
         let space = get_instance_packed_len(&community_token)?;
 
@@ -3191,20 +3187,15 @@ impl Processor {
                 space as u64,
                 program_id,
             ),
-            &[
-                manager_info.clone(),
-                community_token_dto_info.clone()
-            ],
-            &[
-                &[
-                    CommunityToken::get_seed_prefix(),
-                    &stake_pool_info.key.to_bytes()[..],
-                    &program_id.to_bytes()[..],
-                    &[bump_seed],
-                ]
-            ]
+            &[manager_info.clone(), community_token_dto_info.clone()],
+            &[&[
+                CommunityToken::get_seed_prefix(),
+                &stake_pool_info.key.to_bytes()[..],
+                &program_id.to_bytes()[..],
+                &[bump_seed],
+            ]],
         )?;
-        
+
         community_token.serialize(&mut *community_token_dto_info.data.borrow_mut())?;
 
         Ok(())
@@ -3212,7 +3203,7 @@ impl Processor {
 
     /// Creates account for stoting CommunityTokenCounter structure.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [CreateCommunityTokensCounter](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_community_tokens_counter(
@@ -3238,21 +3229,24 @@ impl Processor {
         }
         stake_pool.check_manager(manager_info)?;
 
-        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+        if *community_token_dto_info.key
+            != CommunityToken::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if community_token_dto_info.data_is_empty()
-            || community_token_dto_info.lamports() == 0 {
+        if community_token_dto_info.data_is_empty() || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
-        }    
+        }
 
-        let (community_tokens_counter_pubkey, bump_seed) = CommunityTokensCounter::find_address(program_id, stake_pool_info.key);
+        let (community_tokens_counter_pubkey, bump_seed) =
+            CommunityTokensCounter::find_address(program_id, stake_pool_info.key);
         if *community_tokens_counter_dto_info.key != community_tokens_counter_pubkey {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
 
-        if !community_tokens_counter_dto_info.data_is_empty() 
-            || community_tokens_counter_dto_info.lamports() != 0 {
+        if !community_tokens_counter_dto_info.data_is_empty()
+            || community_tokens_counter_dto_info.lamports() != 0
+        {
             return Err(StakePoolError::DataAlreadyExists.into());
         }
 
@@ -3272,19 +3266,18 @@ impl Processor {
             ),
             &[
                 manager_info.clone(),
-                community_tokens_counter_dto_info.clone()
+                community_tokens_counter_dto_info.clone(),
             ],
-            &[
-                &[
-                    CommunityTokensCounter::get_seed_prefix(),
-                    &stake_pool_info.key.to_bytes()[..],
-                    &program_id.to_bytes()[..],
-                    &[bump_seed],
-                ]
-            ]
+            &[&[
+                CommunityTokensCounter::get_seed_prefix(),
+                &stake_pool_info.key.to_bytes()[..],
+                &program_id.to_bytes()[..],
+                &[bump_seed],
+            ]],
         )?;
 
-        community_tokens_counter.serialize(&mut *community_tokens_counter_dto_info.data.borrow_mut())?;
+        community_tokens_counter
+            .serialize(&mut *community_tokens_counter_dto_info.data.borrow_mut())?;
 
         Ok(())
     }
@@ -3318,16 +3311,13 @@ impl Processor {
         if *dao_state_dto_info.key != dao_state_pubkey {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if !dao_state_dto_info.data_is_empty() 
-            || dao_state_dto_info.lamports() != 0 {
+        if !dao_state_dto_info.data_is_empty() || dao_state_dto_info.lamports() != 0 {
             return Err(StakePoolError::DataAlreadyExists.into());
         }
-        
+
         let rent = &Rent::from_account_info(rent_info)?;
 
-        let dao_state = DaoState {
-            is_enabled
-        };
+        let dao_state = DaoState { is_enabled };
 
         let space = get_instance_packed_len(&dao_state)?;
 
@@ -3339,21 +3329,15 @@ impl Processor {
                 space as u64,
                 program_id,
             ),
-            &[
-                manager_info.clone(),
-                dao_state_dto_info.clone()
-            ],
-            &[
-                &[
-                    DaoState::get_seed_prefix(),
-                    &stake_pool_info.key.to_bytes()[..],
-                    &program_id.to_bytes()[..],
-                    &[bump_seed],
-                ]
-            ]
+            &[manager_info.clone(), dao_state_dto_info.clone()],
+            &[&[
+                DaoState::get_seed_prefix(),
+                &stake_pool_info.key.to_bytes()[..],
+                &program_id.to_bytes()[..],
+                &[bump_seed],
+            ]],
         )?;
 
-        
         dao_state.serialize(&mut *dao_state_dto_info.data.borrow_mut())?;
 
         Ok(())
@@ -3361,18 +3345,19 @@ impl Processor {
 
     /// Creates account for storing CommunityTokenStakingRewards structure.
     /// Account required for dao strategy.
-    /// 
+    ///
     /// Processes [CreateCommunityTokenStakingRewards](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_community_token_staking_rewards(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
-    ) -> ProgramResult {        
+    ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let owner_wallet_info = next_account_info(account_info_iter)?;
         let community_token_staking_rewards_dto_info = next_account_info(account_info_iter)?;
-        let community_token_staking_rewards_counter_dto_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_counter_dto_info =
+            next_account_info(account_info_iter)?;
         let rent_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
@@ -3392,22 +3377,40 @@ impl Processor {
         if !owner_wallet_info.is_signer {
             return Err(StakePoolError::SignatureMissing.into());
         }
-        let (community_token_staking_rewards_pubkey, bump_seed) = CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key);
+        let (community_token_staking_rewards_pubkey, bump_seed) =
+            CommunityTokenStakingRewards::find_address(
+                program_id,
+                stake_pool_info.key,
+                owner_wallet_info.key,
+            );
         if *community_token_staking_rewards_dto_info.key != community_token_staking_rewards_pubkey
-            || *community_token_staking_rewards_counter_dto_info.key != CommunityTokenStakingRewardsCounter::find_address(program_id, stake_pool_info.key).0 {
+            || *community_token_staking_rewards_counter_dto_info.key
+                != CommunityTokenStakingRewardsCounter::find_address(
+                    program_id,
+                    stake_pool_info.key,
+                )
+                .0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if !community_token_staking_rewards_dto_info.data_is_empty() 
-            || community_token_staking_rewards_dto_info.lamports() != 0 {
+        if !community_token_staking_rewards_dto_info.data_is_empty()
+            || community_token_staking_rewards_dto_info.lamports() != 0
+        {
             return Err(StakePoolError::DataAlreadyExists.into());
         }
 
-        if community_token_staking_rewards_counter_dto_info.data_is_empty() 
-            || community_token_staking_rewards_counter_dto_info.lamports() == 0 {
+        if community_token_staking_rewards_counter_dto_info.data_is_empty()
+            || community_token_staking_rewards_counter_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let mut community_token_staking_rewards_counter = try_from_slice_unchecked::<CommunityTokenStakingRewardsCounter>(&community_token_staking_rewards_counter_dto_info.data.borrow())?;
+        let mut community_token_staking_rewards_counter =
+            try_from_slice_unchecked::<CommunityTokenStakingRewardsCounter>(
+                &community_token_staking_rewards_counter_dto_info
+                    .data
+                    .borrow(),
+            )?;
 
         let community_token_staking_rewards = CommunityTokenStakingRewards::new(
             &mut community_token_staking_rewards_counter,
@@ -3416,15 +3419,19 @@ impl Processor {
             stake_pool_info.key.clone(),
             owner_wallet_info.key.clone(),
             epoch,
-            epoch
+            epoch,
         );
 
-        community_token_staking_rewards_counter.serialize(&mut *community_token_staking_rewards_counter_dto_info.data.borrow_mut())?;
+        community_token_staking_rewards_counter.serialize(
+            &mut *community_token_staking_rewards_counter_dto_info
+                .data
+                .borrow_mut(),
+        )?;
 
         let rent = &Rent::from_account_info(rent_info)?;
 
         let space = get_instance_packed_len(&community_token_staking_rewards)?;
-        
+
         invoke_signed(
             &system_instruction::create_account(
                 owner_wallet_info.key,
@@ -3435,20 +3442,19 @@ impl Processor {
             ),
             &[
                 owner_wallet_info.clone(),
-                community_token_staking_rewards_dto_info.clone()
+                community_token_staking_rewards_dto_info.clone(),
             ],
-            &[
-                &[
-                    CommunityTokenStakingRewards::SEED_PREFIX,
-                    &stake_pool_info.key.to_bytes()[..],
-                    &owner_wallet_info.key.to_bytes()[..],
-                    &program_id.to_bytes()[..],
-                    &[bump_seed],
-                ]
-            ]
+            &[&[
+                CommunityTokenStakingRewards::SEED_PREFIX,
+                &stake_pool_info.key.to_bytes()[..],
+                &owner_wallet_info.key.to_bytes()[..],
+                &program_id.to_bytes()[..],
+                &[bump_seed],
+            ]],
         )?;
 
-        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+        community_token_staking_rewards
+            .serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         Ok(())
     }
@@ -3508,29 +3514,42 @@ impl Processor {
         if !owner_wallet_info.is_signer {
             return Err(StakePoolError::SignatureMissing.into());
         }
-        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+        if *community_token_staking_rewards_dto_info.key
+            != CommunityTokenStakingRewards::find_address(
+                program_id,
+                stake_pool_info.key,
+                owner_wallet_info.key,
+            )
+            .0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if community_token_staking_rewards_dto_info.data_is_empty()
-            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            || community_token_staking_rewards_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+        if *community_token_dto_info.key
+            != CommunityToken::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if community_token_dto_info.data_is_empty()
-            || community_token_dto_info.lamports() == 0 {
+        if community_token_dto_info.data_is_empty() || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+        let community_token =
+            try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
 
-        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+        if *dao_community_tokens_to_info.key
+            != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint)
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if dao_community_tokens_to_info.data_is_empty()
-            || dao_community_tokens_to_info.lamports() == 0 {
+            || dao_community_tokens_to_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
@@ -3538,27 +3557,34 @@ impl Processor {
             return Err(StakePoolError::DepositTooSmall.into());
         }
 
-        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        let mut community_token_staking_rewards =
+            try_from_slice_unchecked::<CommunityTokenStakingRewards>(
+                &community_token_staking_rewards_dto_info.data.borrow(),
+            )?;
         community_token_staking_rewards.set_initial_staking_epoch(epoch);
         community_token_staking_rewards.set_last_rewarded_epoch(epoch);
-        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+        community_token_staking_rewards
+            .serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         let new_pool_tokens_wo_idle_fee = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
 
-        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
-            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < deposit_lamports
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0
+            && native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+                < deposit_lamports
         {
-            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
-                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
-            )
-            .ok_or(StakePoolError::CalculationFailure)?
+            stake_pool
+                .convert_amount_of_lamports_to_amount_of_pool_tokens(native_token::sol_to_lamports(
+                    stake_pool.no_fee_deposit_threshold as f64,
+                ))
+                .ok_or(StakePoolError::CalculationFailure)?
         } else {
             new_pool_tokens_wo_idle_fee
         };
 
-        let new_pool_tokens = stake_pool.calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
+        let new_pool_tokens = stake_pool
+            .calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         if new_pool_tokens == 0 {
@@ -3575,14 +3601,14 @@ impl Processor {
         // we don't support the default referral program
         let pool_tokens_referral_fee = 0;
         let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee;
-/*            
-        let pool_tokens_referral_fee = stake_pool
-            .calc_pool_tokens_sol_referral_fee(pool_tokens_sol_deposit_fee)
-            .ok_or(StakePoolError::CalculationFailure)?;
-        let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee
-            .checked_sub(pool_tokens_referral_fee)
-            .ok_or(StakePoolError::CalculationFailure)?;
-*/
+        /*
+                let pool_tokens_referral_fee = stake_pool
+                    .calc_pool_tokens_sol_referral_fee(pool_tokens_sol_deposit_fee)
+                    .ok_or(StakePoolError::CalculationFailure)?;
+                let pool_tokens_manager_deposit_fee = pool_tokens_sol_deposit_fee
+                    .checked_sub(pool_tokens_referral_fee)
+                    .ok_or(StakePoolError::CalculationFailure)?;
+        */
 
         if pool_tokens_user
             .saturating_add(pool_tokens_manager_deposit_fee)
@@ -3653,10 +3679,10 @@ impl Processor {
         Ok(())
     }
 
-    /// Makes a deposit of a user sol in the StakePull reserve stake account, giving back 
-    /// the number of tokens calculated according to a specific strategy. 
+    /// Makes a deposit of a user sol in the StakePull reserve stake account, giving back
+    /// the number of tokens calculated according to a specific strategy.
     /// Сhecks that there is an account required for dao strategy and changes the data on this account.
-    /// 
+    ///
     /// Processes [DaoStrategyDepositSol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_dao_strategy_deposit_sol(
@@ -3664,18 +3690,14 @@ impl Processor {
         accounts: &[AccountInfo],
         deposit_lamports: u64,
     ) -> ProgramResult {
-        Self::process_dao_strategy_deposit_sol_impl(
-            program_id, 
-            accounts,
-            deposit_lamports,
-        )
+        Self::process_dao_strategy_deposit_sol_impl(program_id, accounts, deposit_lamports)
     }
 
-    /// Makes a deposit of a user sol in the StakePool reserve stake account, giving back 
-    /// the number of tokens calculated according to a specific strategy. 
+    /// Makes a deposit of a user sol in the StakePool reserve stake account, giving back
+    /// the number of tokens calculated according to a specific strategy.
     /// Сhecks that there is an account required for dao strategy and changes the data on this account.
     /// Check a whitelisted referral (Referral program v2)
-    /// 
+    ///
     /// Processes [DaoStrategyDepositSolWithReferrer2](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_dao_strategy_deposit_sol_with_referrer2(
@@ -3685,7 +3707,9 @@ impl Processor {
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
-        let referrer_fee_info = account_info_iter.nth(6).ok_or(ProgramError::NotEnoughAccountKeys)?;
+        let referrer_fee_info = account_info_iter
+            .nth(6)
+            .ok_or(ProgramError::NotEnoughAccountKeys)?;
         let referrer_list_dto_info = next_account_info(account_info_iter)?;
 
         check_account_owner(stake_pool_info, program_id)?;
@@ -3694,18 +3718,16 @@ impl Processor {
         if !stake_pool.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
-        stake_pool.check_referrer_list(
-            referrer_list_dto_info,
-            program_id,
-            stake_pool_info.key,
-        )?;
+        stake_pool.check_referrer_list(referrer_list_dto_info, program_id, stake_pool_info.key)?;
         let mut referrer_list_data = referrer_list_dto_info.data.borrow_mut();
-        let (header, referrer_list) =
-            ReferrerListHeader::deserialize_vec(&mut referrer_list_data)?;
+        let (header, referrer_list) = ReferrerListHeader::deserialize_vec(&mut referrer_list_data)?;
         if !header.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
-        if referrer_list.find::<Referrer>(referrer_fee_info.key.as_ref(), Referrer::memcmp_pubkey).is_none() {
+        if referrer_list
+            .find::<Referrer>(referrer_fee_info.key.as_ref(), Referrer::memcmp_pubkey)
+            .is_none()
+        {
             return Err(StakePoolError::ReferrerNotFound.into());
         }
         Self::process_dao_strategy_deposit_sol_impl(
@@ -3715,11 +3737,11 @@ impl Processor {
         )
     }
 
-    /// Makes a deposit of a user sol in the StakePool reserve stake account, giving back 
-    /// the number of tokens calculated according to a specific strategy. 
+    /// Makes a deposit of a user sol in the StakePool reserve stake account, giving back
+    /// the number of tokens calculated according to a specific strategy.
     /// Сhecks that there is an account required for dao strategy and changes the data on this account.
     /// Pays the referral fee to a whitelisted referral and collect the metrics
-    /// 
+    ///
     /// Processes [DaoStrategyDepositSolWithReferrer](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     #[allow(dead_code)]
@@ -3772,18 +3794,16 @@ impl Processor {
         stake_pool.check_reserve_stake(reserve_stake_account_info)?;
         stake_pool.check_manager_fee(manager_fee_info)?;
 
-        stake_pool.check_referrer_list(
-            referrer_list_dto_info,
-            program_id,
-            stake_pool_info.key,
-        )?;
+        stake_pool.check_referrer_list(referrer_list_dto_info, program_id, stake_pool_info.key)?;
         let mut referrer_list_data = referrer_list_dto_info.data.borrow_mut();
-        let (header, referrer_list) =
-            ReferrerListHeader::deserialize_vec(&mut referrer_list_data)?;
+        let (header, referrer_list) = ReferrerListHeader::deserialize_vec(&mut referrer_list_data)?;
         if !header.is_valid() {
             return Err(StakePoolError::InvalidState.into());
         }
-        if referrer_list.find::<Referrer>(referrer_fee_info.key.as_ref(), Referrer::memcmp_pubkey).is_none() {
+        if referrer_list
+            .find::<Referrer>(referrer_fee_info.key.as_ref(), Referrer::memcmp_pubkey)
+            .is_none()
+        {
             return Err(StakePoolError::ReferrerNotFound.into());
         }
         if *referrer_fee_info.key == *owner_wallet_info.key {
@@ -3797,79 +3817,107 @@ impl Processor {
         if !owner_wallet_info.is_signer {
             return Err(StakePoolError::SignatureMissing.into());
         }
-        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+        if *community_token_staking_rewards_dto_info.key
+            != CommunityTokenStakingRewards::find_address(
+                program_id,
+                stake_pool_info.key,
+                owner_wallet_info.key,
+            )
+            .0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if community_token_staking_rewards_dto_info.data_is_empty()
-            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            || community_token_staking_rewards_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
-        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+        if *community_token_dto_info.key
+            != CommunityToken::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if community_token_dto_info.data_is_empty()
-            || community_token_dto_info.lamports() == 0 {
+        if community_token_dto_info.data_is_empty() || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
-        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+        let community_token =
+            try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
 
-        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+        if *dao_community_tokens_to_info.key
+            != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint)
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if dao_community_tokens_to_info.data_is_empty()
-            || dao_community_tokens_to_info.lamports() == 0 {
+            || dao_community_tokens_to_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
         if deposit_lamports < MINIMUM_DEPOSIT {
             return Err(StakePoolError::DepositTooSmall.into());
         }
-        let metrics_deposit_referrer_counter_pubkey = MetricsDepositReferrerCounter::find_address(program_id, stake_pool_info.key).0;
-        if metrics_deposit_referrer_counter_pubkey != *metrics_deposit_referrer_counter_dto_info.key {
+        let metrics_deposit_referrer_counter_pubkey =
+            MetricsDepositReferrerCounter::find_address(program_id, stake_pool_info.key).0;
+        if metrics_deposit_referrer_counter_pubkey != *metrics_deposit_referrer_counter_dto_info.key
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if metrics_deposit_referrer_counter_dto_info.data_is_empty()
-            || metrics_deposit_referrer_counter_dto_info.lamports() == 0 {
+            || metrics_deposit_referrer_counter_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
         check_account_owner(metrics_deposit_referrer_counter_dto_info, program_id)?;
-        let mut metrics_deposit_referrer_counter = try_from_slice_unchecked::<MetricsDepositReferrerCounter>(&metrics_deposit_referrer_counter_dto_info.data.borrow())?;
+        let mut metrics_deposit_referrer_counter =
+            try_from_slice_unchecked::<MetricsDepositReferrerCounter>(
+                &metrics_deposit_referrer_counter_dto_info.data.borrow(),
+            )?;
 
         let timestamp = Clock::get()?.unix_timestamp;
-        let (metrics_deposit_referrer_pubkey, metrics_bump_seed) = MetricsDepositReferrer::find_address(
-            program_id,
-            stake_pool_info.key,
-            metrics_deposit_referrer_counter.get_number_of_accounts(),
-        );
+        let (metrics_deposit_referrer_pubkey, metrics_bump_seed) =
+            MetricsDepositReferrer::find_address(
+                program_id,
+                stake_pool_info.key,
+                metrics_deposit_referrer_counter.get_number_of_accounts(),
+            );
         if metrics_deposit_referrer_pubkey != *metrics_deposit_referrer_dto_info.key {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if !metrics_deposit_referrer_dto_info.data_is_empty()
-            || metrics_deposit_referrer_dto_info.lamports() != 0 {
+            || metrics_deposit_referrer_dto_info.lamports() != 0
+        {
             return Err(StakePoolError::DataAlreadyExists.into());
         }
-        check_account_owner(metrics_deposit_referrer_counter_dto_info, program_id)?;        
+        check_account_owner(metrics_deposit_referrer_counter_dto_info, program_id)?;
 
-        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        let mut community_token_staking_rewards =
+            try_from_slice_unchecked::<CommunityTokenStakingRewards>(
+                &community_token_staking_rewards_dto_info.data.borrow(),
+            )?;
         community_token_staking_rewards.set_initial_staking_epoch(epoch);
         community_token_staking_rewards.set_last_rewarded_epoch(epoch);
-        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+        community_token_staking_rewards
+            .serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         let new_pool_tokens_wo_idle_fee = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(deposit_lamports)
             .ok_or(StakePoolError::CalculationFailure)?;
 
-        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
-            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < deposit_lamports
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0
+            && native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+                < deposit_lamports
         {
-            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
-                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
-            )
-            .ok_or(StakePoolError::CalculationFailure)?
+            stake_pool
+                .convert_amount_of_lamports_to_amount_of_pool_tokens(native_token::sol_to_lamports(
+                    stake_pool.no_fee_deposit_threshold as f64,
+                ))
+                .ok_or(StakePoolError::CalculationFailure)?
         } else {
             new_pool_tokens_wo_idle_fee
         };
 
-        let new_pool_tokens = stake_pool.calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
+        let new_pool_tokens = stake_pool
+            .calculate_deposit_amount_by_reward_simulation(new_pool_tokens_wo_idle_fee)
             .ok_or(StakePoolError::CalculationFailure)?;
 
         if new_pool_tokens == 0 {
@@ -3910,16 +3958,14 @@ impl Processor {
 
         // we pay the referral fee in lamports
         let sol_referral_fee = stake_pool
-            .calc_sol_referral_fee(
-                if stake_pool.no_fee_deposit_threshold > 0 {
-                    std::cmp::min(
-                        deposit_lamports,
-                        native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64),
-                    )
-                } else {
-                    deposit_lamports
-                }
-            )
+            .calc_sol_referral_fee(if stake_pool.no_fee_deposit_threshold > 0 {
+                std::cmp::min(
+                    deposit_lamports,
+                    native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64),
+                )
+            } else {
+                deposit_lamports
+            })
             .ok_or(StakePoolError::CalculationFailure)?;
 
         // this instruction shouldn't be used without referral fee
@@ -3981,7 +4027,9 @@ impl Processor {
         stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
 
         // write metrics
-        let id_str = metrics_deposit_referrer_counter.get_number_of_accounts().to_string();
+        let id_str = metrics_deposit_referrer_counter
+            .get_number_of_accounts()
+            .to_string();
         let metrics_account_signer_seeds: &[&[_]] = &[
             MetricsDepositReferrer::get_seed_prefix(),
             &stake_pool_info.key.to_bytes()[..32],
@@ -4000,9 +4048,11 @@ impl Processor {
             timestamp,
             *owner_wallet_info.key,
             *referrer_fee_info.key,
-            deposit_lamports.checked_add(sol_referral_fee).ok_or(StakePoolError::CalculationFailure)?,
-        );  
-        let space = get_instance_packed_len(&metrics_deposit_referrer)?;      
+            deposit_lamports
+                .checked_add(sol_referral_fee)
+                .ok_or(StakePoolError::CalculationFailure)?,
+        );
+        let space = get_instance_packed_len(&metrics_deposit_referrer)?;
 
         create_pda_account(
             owner_wallet_info,
@@ -4013,16 +4063,18 @@ impl Processor {
             metrics_deposit_referrer_dto_info,
             metrics_account_signer_seeds,
         )?;
-        metrics_deposit_referrer.serialize(&mut *metrics_deposit_referrer_dto_info.data.borrow_mut())?;
-        metrics_deposit_referrer_counter.serialize(&mut *metrics_deposit_referrer_counter_dto_info.data.borrow_mut())?;
+        metrics_deposit_referrer
+            .serialize(&mut *metrics_deposit_referrer_dto_info.data.borrow_mut())?;
+        metrics_deposit_referrer_counter
+            .serialize(&mut *metrics_deposit_referrer_counter_dto_info.data.borrow_mut())?;
 
         Ok(())
     }
 
-    /// Moves the sol from StakePool reserve stake account to user wallet and 
+    /// Moves the sol from StakePool reserve stake account to user wallet and
     /// burns the tokens according to a specific strategy.
     /// Сhecks that there is an account required for dao strategy and changes the data on this account.
-    /// 
+    ///
     /// Processes [WithdrawSol](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_dao_strategy_withdraw_sol(
@@ -4081,36 +4133,53 @@ impl Processor {
         if !owner_wallet_info.is_signer {
             return Err(StakePoolError::SignatureMissing.into());
         }
-        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+        if *community_token_staking_rewards_dto_info.key
+            != CommunityTokenStakingRewards::find_address(
+                program_id,
+                stake_pool_info.key,
+                owner_wallet_info.key,
+            )
+            .0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if community_token_staking_rewards_dto_info.data_is_empty()
-            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            || community_token_staking_rewards_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+        if *community_token_dto_info.key
+            != CommunityToken::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if community_token_dto_info.data_is_empty()
-            || community_token_dto_info.lamports() == 0 {
+        if community_token_dto_info.data_is_empty() || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+        let community_token =
+            try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
 
-        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+        if *dao_community_tokens_to_info.key
+            != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint)
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if dao_community_tokens_to_info.data_is_empty()
-            || dao_community_tokens_to_info.lamports() == 0 {
+            || dao_community_tokens_to_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        let mut community_token_staking_rewards =
+            try_from_slice_unchecked::<CommunityTokenStakingRewards>(
+                &community_token_staking_rewards_dto_info.data.borrow(),
+            )?;
         community_token_staking_rewards.set_initial_staking_epoch(epoch);
         community_token_staking_rewards.set_last_rewarded_epoch(epoch);
-        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+        community_token_staking_rewards
+            .serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key {
             0
@@ -4195,10 +4264,10 @@ impl Processor {
         Ok(())
     }
 
-    /// Moves the stake from the validator to user stake account and 
+    /// Moves the stake from the validator to user stake account and
     /// burns the tokens according to a specific strategy.
     /// Сhecks that there is an account required for dao strategy and changes the data on this account.
-    /// 
+    ///
     /// Processes [DaoStrategyWithdrawStake](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_dao_strategy_withdraw_stake(
@@ -4264,36 +4333,53 @@ impl Processor {
         if !owner_wallet_info.is_signer {
             return Err(StakePoolError::SignatureMissing.into());
         }
-        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+        if *community_token_staking_rewards_dto_info.key
+            != CommunityTokenStakingRewards::find_address(
+                program_id,
+                stake_pool_info.key,
+                owner_wallet_info.key,
+            )
+            .0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if community_token_staking_rewards_dto_info.data_is_empty()
-            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            || community_token_staking_rewards_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+        if *community_token_dto_info.key
+            != CommunityToken::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if community_token_dto_info.data_is_empty()
-            || community_token_dto_info.lamports() == 0 {
+        if community_token_dto_info.data_is_empty() || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+        let community_token =
+            try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
 
-        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+        if *dao_community_tokens_to_info.key
+            != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint)
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if dao_community_tokens_to_info.data_is_empty()
-            || dao_community_tokens_to_info.lamports() == 0 {
+            || dao_community_tokens_to_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        let mut community_token_staking_rewards =
+            try_from_slice_unchecked::<CommunityTokenStakingRewards>(
+                &community_token_staking_rewards_dto_info.data.borrow(),
+            )?;
         community_token_staking_rewards.set_initial_staking_epoch(clock.epoch);
         community_token_staking_rewards.set_last_rewarded_epoch(clock.epoch);
-        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+        community_token_staking_rewards
+            .serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         let pool_tokens_fee = if stake_pool.manager_fee_account == *burn_from_pool_info.key {
             0
@@ -4477,10 +4563,13 @@ impl Processor {
     /// Makes a deposit of a user stake in the StakePull validator, giving back
     /// the number of tokens calculated according to a specific strategy.
     /// Сhecks that there is an account required for dao strategy and changes the data on this account.
-    /// 
+    ///
     /// Processes [DaoStrategyDepositStake](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
-    fn process_dao_strategy_deposit_stake(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    fn process_dao_strategy_deposit_stake(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let validator_list_info = next_account_info(account_info_iter)?;
@@ -4543,50 +4632,69 @@ impl Processor {
         if !owner_wallet_info.is_signer {
             return Err(StakePoolError::SignatureMissing.into());
         }
-        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, owner_wallet_info.key).0 {
+        if *community_token_staking_rewards_dto_info.key
+            != CommunityTokenStakingRewards::find_address(
+                program_id,
+                stake_pool_info.key,
+                owner_wallet_info.key,
+            )
+            .0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if community_token_staking_rewards_dto_info.data_is_empty()
-            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            || community_token_staking_rewards_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+        if *community_token_dto_info.key
+            != CommunityToken::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if community_token_dto_info.data_is_empty()
-            || community_token_dto_info.lamports() == 0 {
+        if community_token_dto_info.data_is_empty() || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
+        let community_token =
+            try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
 
-        if *dao_community_tokens_to_info.key != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint) {
+        if *dao_community_tokens_to_info.key
+            != get_associated_token_address(owner_wallet_info.key, &community_token.token_mint)
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if dao_community_tokens_to_info.data_is_empty()
-            || dao_community_tokens_to_info.lamports() == 0 {
+            || dao_community_tokens_to_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+        let mut community_token_staking_rewards =
+            try_from_slice_unchecked::<CommunityTokenStakingRewards>(
+                &community_token_staking_rewards_dto_info.data.borrow(),
+            )?;
         community_token_staking_rewards.set_initial_staking_epoch(clock.epoch);
         community_token_staking_rewards.set_last_rewarded_epoch(clock.epoch);
-        community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+        community_token_staking_rewards
+            .serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
         let pre_all_validator_lamports = dest_stake_account_info.lamports();
         let mut pre_stake = pre_all_validator_lamports;
 
-        let stake_state = try_from_slice_unchecked::<stake::state::StakeState>(&stake_info.data.borrow())?;
+        let stake_state =
+            try_from_slice_unchecked::<stake::state::StakeState>(&stake_info.data.borrow())?;
 
         match stake_state {
-            stake::state::StakeState::Stake(_, stake) if stake.delegation.deactivation_epoch == Epoch::MAX => {
+            stake::state::StakeState::Stake(_, stake)
+                if stake.delegation.deactivation_epoch == Epoch::MAX =>
+            {
                 let stake_vote_account_address = stake.delegation.voter_pubkey;
-                let validator_stake_info = validator_list
-                    .find_mut::<ValidatorStakeInfo>(
-                        stake_vote_account_address.as_ref(),
-                        ValidatorStakeInfo::memcmp_pubkey,
-                    ); 
+                let validator_stake_info = validator_list.find_mut::<ValidatorStakeInfo>(
+                    stake_vote_account_address.as_ref(),
+                    ValidatorStakeInfo::memcmp_pubkey,
+                );
 
                 if validator_stake_info.is_none() {
                     // the stake account is active and delegated to a foreign validator,
@@ -4599,7 +4707,7 @@ impl Processor {
                     let validator_vote_account_address = dest_stake.delegation.voter_pubkey;
 
                     if validator_vote_account_address != stake_vote_account_address {
-                        return Err(StakePoolError::IncorrectDepositVoteAddress.into())
+                        return Err(StakePoolError::IncorrectDepositVoteAddress.into());
                     }
                     check_validator_stake_address(
                         program_id,
@@ -4607,7 +4715,9 @@ impl Processor {
                         dest_stake_account_info.key,
                         &validator_vote_account_address,
                     )?;
-                    if let Some(preferred_deposit) = stake_pool.preferred_deposit_validator_vote_address {
+                    if let Some(preferred_deposit) =
+                        stake_pool.preferred_deposit_validator_vote_address
+                    {
                         if preferred_deposit != validator_vote_account_address {
                             msg!(
                                 "Incorrect deposit address, expected {}, received {}",
@@ -4623,7 +4733,7 @@ impl Processor {
                             ValidatorStakeInfo::memcmp_pubkey,
                         )
                         .ok_or(StakePoolError::ValidatorNotFound)?;
-        
+
                     if validator_stake_info.status != StakeStatus::Active {
                         msg!("Validator is marked for removal and no longer accepting deposits");
                         return Err(StakePoolError::ValidatorNotFound.into());
@@ -4632,15 +4742,15 @@ impl Processor {
                     pre_stake = dest_stake.delegation.stake;
                 }
             }
-            stake::state::StakeState::Initialized(_)
-            | stake::state::StakeState::Stake(_, _) => {
+            stake::state::StakeState::Initialized(_) | stake::state::StakeState::Stake(_, _) => {
                 // the stake account is deactivated, so merge it with the pool's reserve account
                 if dest_stake_account_info.key != reserve_stake_account_info.key {
                     return Err(StakePoolError::InvalidStakeAccountAddress.into());
                 }
-            },
-            stake::state::StakeState::Uninitialized
-            | stake::state::StakeState::RewardsPool => return Err(StakePoolError::WrongStakeState.into()),
+            }
+            stake::state::StakeState::Uninitialized | stake::state::StakeState::RewardsPool => {
+                return Err(StakePoolError::WrongStakeState.into())
+            }
         };
 
         let (stake_deposit_authority_program_address, deposit_bump_seed) =
@@ -4664,7 +4774,7 @@ impl Processor {
                 clock_info.clone(),
                 stake_program_info.clone(),
             )?;
-        }        
+        }
 
         if is_just_deactivation {
             Self::stake_deactivate(
@@ -4674,7 +4784,7 @@ impl Processor {
                 stake_pool_info.key,
                 AUTHORITY_WITHDRAW,
                 stake_pool.stake_withdraw_bump_seed,
-            )?;            
+            )?;
         } else {
             Self::stake_merge(
                 stake_pool_info.key,
@@ -4695,8 +4805,9 @@ impl Processor {
             // the reward simulation will be added next epoch since the stake will not have worked for 2 epochs
             post_all_validator_lamports = post_all_validator_lamports
                 .checked_add(
-                    stake_pool.calculate_deposit_amount_by_reward_simulation(stake_info.lamports())
-                        .ok_or(StakePoolError::CalculationFailure)?
+                    stake_pool
+                        .calculate_deposit_amount_by_reward_simulation(stake_info.lamports())
+                        .ok_or(StakePoolError::CalculationFailure)?,
                 )
                 .ok_or(StakePoolError::CalculationFailure)?;
         }
@@ -4728,21 +4839,24 @@ impl Processor {
             stake_deposit_lamports = stake_info.lamports();
             sol_deposit_lamports = 0;
         }
-  
+
         let new_pool_tokens = stake_pool
             .convert_amount_of_lamports_to_amount_of_pool_tokens(
-                stake_pool.calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
-                    .ok_or(StakePoolError::CalculationFailure)?
+                stake_pool
+                    .calculate_deposit_amount_by_reward_simulation(total_deposit_lamports)
+                    .ok_or(StakePoolError::CalculationFailure)?,
             )
             .ok_or(StakePoolError::CalculationFailure)?;
 
-        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0 &&
-            native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64) < stake_deposit_lamports
+        let new_pool_tokens_from_deposit_threshold = if stake_pool.no_fee_deposit_threshold > 0
+            && native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
+                < stake_deposit_lamports
         {
-            stake_pool.convert_amount_of_lamports_to_amount_of_pool_tokens(
-                native_token::sol_to_lamports(stake_pool.no_fee_deposit_threshold as f64)
-            )
-            .ok_or(StakePoolError::CalculationFailure)?
+            stake_pool
+                .convert_amount_of_lamports_to_amount_of_pool_tokens(native_token::sol_to_lamports(
+                    stake_pool.no_fee_deposit_threshold as f64,
+                ))
+                .ok_or(StakePoolError::CalculationFailure)?
         } else {
             stake_pool
                 .convert_amount_of_lamports_to_amount_of_pool_tokens(stake_deposit_lamports)
@@ -4770,15 +4884,15 @@ impl Processor {
         // we don't support the default referral program
         let pool_tokens_referral_fee = 0;
         let pool_tokens_manager_deposit_fee = total_fee;
-/*
-        let pool_tokens_referral_fee = stake_pool
-            .calc_pool_tokens_stake_referral_fee(total_fee)
-            .ok_or(StakePoolError::CalculationFailure)?;
+        /*
+                let pool_tokens_referral_fee = stake_pool
+                    .calc_pool_tokens_stake_referral_fee(total_fee)
+                    .ok_or(StakePoolError::CalculationFailure)?;
 
-        let pool_tokens_manager_deposit_fee = total_fee
-            .checked_sub(pool_tokens_referral_fee)
-            .ok_or(StakePoolError::CalculationFailure)?;
-*/
+                let pool_tokens_manager_deposit_fee = total_fee
+                    .checked_sub(pool_tokens_referral_fee)
+                    .ok_or(StakePoolError::CalculationFailure)?;
+        */
         if pool_tokens_user
             .saturating_add(pool_tokens_manager_deposit_fee)
             .saturating_add(pool_tokens_referral_fee)
@@ -4828,8 +4942,8 @@ impl Processor {
 
         // withdraw additional lamports to the reserve
         // if we don't merge our stake to the reserve
-        if sol_deposit_lamports > 0 
-            && dest_stake_account_info.key != reserve_stake_account_info.key {
+        if sol_deposit_lamports > 0 && dest_stake_account_info.key != reserve_stake_account_info.key
+        {
             Self::stake_withdraw(
                 stake_pool_info.key,
                 dest_stake_account_info.clone(),
@@ -4860,11 +4974,11 @@ impl Processor {
             let (_, dest_stake) = get_stake_state(dest_stake_account_info)?;
             let vote_account_address = dest_stake.delegation.voter_pubkey;
             let mut validator_stake_info = validator_list
-            .find_mut::<ValidatorStakeInfo>(
-                vote_account_address.as_ref(),
-                ValidatorStakeInfo::memcmp_pubkey,
-            )
-            .ok_or(StakePoolError::ValidatorNotFound)?;
+                .find_mut::<ValidatorStakeInfo>(
+                    vote_account_address.as_ref(),
+                    ValidatorStakeInfo::memcmp_pubkey,
+                )
+                .ok_or(StakePoolError::ValidatorNotFound)?;
             validator_stake_info.active_stake_lamports = post_stake
                 .checked_sub(MINIMUM_ACTIVE_STAKE)
                 .ok_or(StakePoolError::CalculationFailure)?;
@@ -4875,7 +4989,7 @@ impl Processor {
 
     /// Create account for storing CommunityTokenStakingRewards structure.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [CreateCommunityTokenStakingRewardsCounter](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_community_token_staking_rewards_counter(
@@ -4885,7 +4999,8 @@ impl Processor {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let manager_info = next_account_info(account_info_iter)?;
-        let community_token_staking_rewards_counter_dto_info = next_account_info(account_info_iter)?;
+        let community_token_staking_rewards_counter_dto_info =
+            next_account_info(account_info_iter)?;
         let community_token_dto_info = next_account_info(account_info_iter)?;
         let rent_info = next_account_info(account_info_iter)?;
 
@@ -4901,19 +5016,23 @@ impl Processor {
         }
         stake_pool.check_manager(manager_info)?;
 
-        let (community_token_staking_rewards_counter_pubkey, bump_seed) = CommunityTokenStakingRewardsCounter::find_address(program_id, stake_pool_info.key);
-        if *community_token_staking_rewards_counter_dto_info.key != community_token_staking_rewards_counter_pubkey 
-            || *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+        let (community_token_staking_rewards_counter_pubkey, bump_seed) =
+            CommunityTokenStakingRewardsCounter::find_address(program_id, stake_pool_info.key);
+        if *community_token_staking_rewards_counter_dto_info.key
+            != community_token_staking_rewards_counter_pubkey
+            || *community_token_dto_info.key
+                != CommunityToken::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        
-        if community_token_dto_info.data_is_empty() 
-            || community_token_dto_info.lamports() == 0 {
+
+        if community_token_dto_info.data_is_empty() || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        if !community_token_staking_rewards_counter_dto_info.data_is_empty() 
-            || community_token_staking_rewards_counter_dto_info.lamports() != 0 {
+        if !community_token_staking_rewards_counter_dto_info.data_is_empty()
+            || community_token_staking_rewards_counter_dto_info.lamports() != 0
+        {
             return Err(StakePoolError::DataAlreadyExists.into());
         }
 
@@ -4933,33 +5052,35 @@ impl Processor {
             ),
             &[
                 manager_info.clone(),
-                community_token_staking_rewards_counter_dto_info.clone()
+                community_token_staking_rewards_counter_dto_info.clone(),
             ],
-            &[
-                &[
-                    CommunityTokenStakingRewardsCounter::get_seed_prefix(),
-                    &stake_pool_info.key.to_bytes()[..],
-                    &program_id.to_bytes()[..],
-                    &[bump_seed],
-                ]
-            ]
+            &[&[
+                CommunityTokenStakingRewardsCounter::get_seed_prefix(),
+                &stake_pool_info.key.to_bytes()[..],
+                &program_id.to_bytes()[..],
+                &[bump_seed],
+            ]],
         )?;
 
-        community_token_staking_rewards_counter.serialize(&mut *community_token_staking_rewards_counter_dto_info.data.borrow_mut())?;
+        community_token_staking_rewards_counter.serialize(
+            &mut *community_token_staking_rewards_counter_dto_info
+                .data
+                .borrow_mut(),
+        )?;
 
         Ok(())
     }
 
     /// Mints Community tokens to user token account.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [MintCommunityToken](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_mint_community_token(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
         amount: u64,
-        current_epoch: u64
+        current_epoch: u64,
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
@@ -4974,7 +5095,7 @@ impl Processor {
         let system_program_info = next_account_info(account_info_iter)?;
         let token_program_info = next_account_info(account_info_iter)?;
         let clock_info = next_account_info(account_info_iter)?;
-        
+
         let clock = &Clock::from_account_info(clock_info)?;
 
         check_account_owner(stake_pool_info, program_id)?;
@@ -4999,40 +5120,56 @@ impl Processor {
         stake_pool.check_manager(manager_info)?;
         check_system_program(system_program_info.key)?;
 
-        if *community_token_dto_info.key != CommunityToken::find_address(program_id, stake_pool_info.key).0 {
+        if *community_token_dto_info.key
+            != CommunityToken::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if community_token_dto_info.data_is_empty()
-            || community_token_dto_info.lamports() == 0 {
+        if community_token_dto_info.data_is_empty() || community_token_dto_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
-        let community_token = try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;       
+        let community_token =
+            try_from_slice_unchecked::<CommunityToken>(&community_token_dto_info.data.borrow())?;
 
         if *dao_community_token_mint_info.key != community_token.token_mint {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
 
-        if *dao_community_tokens_to_info.key != get_associated_token_address(user_wallet_info.key, dao_community_token_mint_info.key) {
+        if *dao_community_tokens_to_info.key
+            != get_associated_token_address(user_wallet_info.key, dao_community_token_mint_info.key)
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if dao_community_tokens_to_info.data_is_empty()
-            || dao_community_tokens_to_info.lamports() == 0 {
+            || dao_community_tokens_to_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        if *community_tokens_counter_dto_info.key != CommunityTokensCounter::find_address(program_id, stake_pool_info.key).0 {
+        if *community_tokens_counter_dto_info.key
+            != CommunityTokensCounter::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if community_tokens_counter_dto_info.data_is_empty()
-            || community_tokens_counter_dto_info.lamports() == 0 {
+            || community_tokens_counter_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
-        } 
+        }
 
-        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, user_wallet_info.key).0 {
+        if *community_token_staking_rewards_dto_info.key
+            != CommunityTokenStakingRewards::find_address(
+                program_id,
+                stake_pool_info.key,
+                user_wallet_info.key,
+            )
+            .0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if community_token_staking_rewards_dto_info.data_is_empty()
-            || community_token_staking_rewards_dto_info.lamports() == 0 {
+            || community_token_staking_rewards_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
@@ -5041,15 +5178,23 @@ impl Processor {
         }
 
         if amount > 0 {
-            let mut community_token_staking_rewards = try_from_slice_unchecked::<CommunityTokenStakingRewards>(&community_token_staking_rewards_dto_info.data.borrow())?;
+            let mut community_token_staking_rewards =
+                try_from_slice_unchecked::<CommunityTokenStakingRewards>(
+                    &community_token_staking_rewards_dto_info.data.borrow(),
+                )?;
             community_token_staking_rewards.set_last_rewarded_epoch(current_epoch);
-            community_token_staking_rewards.serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
+            community_token_staking_rewards
+                .serialize(&mut *community_token_staking_rewards_dto_info.data.borrow_mut())?;
 
-            let mut community_tokens_counter = try_from_slice_unchecked::<CommunityTokensCounter>(&community_tokens_counter_dto_info.data.borrow())?;
-            let num = community_tokens_counter.fill_evs_dao_reserve(amount)
+            let mut community_tokens_counter = try_from_slice_unchecked::<CommunityTokensCounter>(
+                &community_tokens_counter_dto_info.data.borrow(),
+            )?;
+            let num = community_tokens_counter
+                .fill_evs_dao_reserve(amount)
                 .ok_or(StakePoolError::CalculationFailure)?;
-            community_tokens_counter.serialize(&mut *community_tokens_counter_dto_info.data.borrow_mut())?;
-            
+            community_tokens_counter
+                .serialize(&mut *community_tokens_counter_dto_info.data.borrow_mut())?;
+
             Self::token_mint_to(
                 stake_pool_info.key,
                 token_program_info.clone(),
@@ -5067,13 +5212,13 @@ impl Processor {
 
     /// Deletes account for storing CommunityTokenStakingRewards structure from network.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [DeleteCommunityTokenStakingRewards](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_delete_community_token_staking_rewards(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
-    ) -> ProgramResult {        
+    ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let manager_info = next_account_info(account_info_iter)?;
@@ -5093,24 +5238,36 @@ impl Processor {
         stake_pool.check_manager(manager_info)?;
         stake_pool.check_mint(pool_mint_info)?;
 
-        if *user_pool_token_account_info.key != get_associated_token_address(user_wallet_info.key, pool_mint_info.key) {
+        if *user_pool_token_account_info.key
+            != get_associated_token_address(user_wallet_info.key, pool_mint_info.key)
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
         if user_pool_token_account_info.data_is_empty()
-            || user_pool_token_account_info.lamports() == 0 {
+            || user_pool_token_account_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        if *community_token_staking_rewards_dto_info.key != CommunityTokenStakingRewards::find_address(program_id, stake_pool_info.key, user_wallet_info.key).0 {
+        if *community_token_staking_rewards_dto_info.key
+            != CommunityTokenStakingRewards::find_address(
+                program_id,
+                stake_pool_info.key,
+                user_wallet_info.key,
+            )
+            .0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if community_token_staking_rewards_dto_info.data_is_empty() 
-            || community_token_staking_rewards_dto_info.lamports() == 0 {
+        if community_token_staking_rewards_dto_info.data_is_empty()
+            || community_token_staking_rewards_dto_info.lamports() == 0
+        {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
         let user_pool_token_account_data = user_pool_token_account_info.data.borrow();
-        let user_pool_token_account = StateWithExtensions::<Account>::unpack(&user_pool_token_account_data)?;
+        let user_pool_token_account =
+            StateWithExtensions::<Account>::unpack(&user_pool_token_account_data)?;
         if user_pool_token_account.base.amount > 0 {
             return Err(StakePoolError::NonZeroTokenBalance.into());
         }
@@ -5119,16 +5276,21 @@ impl Processor {
             .lamports()
             .checked_add(community_token_staking_rewards_dto_info.lamports())
             .ok_or(StakePoolError::CalculationFailure)?;
-        **community_token_staking_rewards_dto_info.lamports.borrow_mut() = 0;
+        **community_token_staking_rewards_dto_info
+            .lamports
+            .borrow_mut() = 0;
 
         Ok(())
     }
 
     /// Merge pool's inactive stake account with the pool's reserve stake account
-    /// 
+    ///
     /// Processes [MergeInactiveStake](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
-    fn process_merge_inactive_stake(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    fn process_merge_inactive_stake(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
 
         let stake_pool_info = next_account_info(account_info_iter)?;
@@ -5174,22 +5336,24 @@ impl Processor {
         stake_pool.total_lamports = stake_pool
             .total_lamports
             .checked_add(
-                stake_info.lamports()
+                stake_info
+                    .lamports()
                     .checked_sub(
-                        stake_pool.calculate_deposit_amount_by_reward_simulation(stake_info.lamports())
-                            .ok_or(StakePoolError::CalculationFailure)?
+                        stake_pool
+                            .calculate_deposit_amount_by_reward_simulation(stake_info.lamports())
+                            .ok_or(StakePoolError::CalculationFailure)?,
                     )
-                    .ok_or(StakePoolError::CalculationFailure)?
+                    .ok_or(StakePoolError::CalculationFailure)?,
             )
             .ok_or(StakePoolError::CalculationFailure)?;
         stake_pool.serialize(&mut *stake_pool_info.data.borrow_mut())?;
 
         Ok(())
-    }        
+    }
 
     /// Creates a list of stake pool's referrers
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [CreateReferrerList](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_referrer_list(
@@ -5213,15 +5377,15 @@ impl Processor {
         }
         stake_pool.check_manager(manager_info)?;
 
-        let (referrer_list_pubkey, bump_seed) = ReferrerList::find_address(program_id, stake_pool_info.key);
+        let (referrer_list_pubkey, bump_seed) =
+            ReferrerList::find_address(program_id, stake_pool_info.key);
         if *referrer_list_dto_info.key != referrer_list_pubkey {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
-        if !referrer_list_dto_info.data_is_empty() 
-            || referrer_list_dto_info.lamports() != 0 {
+        if !referrer_list_dto_info.data_is_empty() || referrer_list_dto_info.lamports() != 0 {
             return Err(StakePoolError::AlreadyInUse.into());
         }
-        let mut referrer_list = ReferrerList::new(max_referrers);  
+        let mut referrer_list = ReferrerList::new(max_referrers);
         let rent = &Rent::from_account_info(rent_info)?;
         let space = get_instance_packed_len(&referrer_list)?;
 
@@ -5233,18 +5397,13 @@ impl Processor {
                 space as u64,
                 program_id,
             ),
-            &[
-                manager_info.clone(),
-                referrer_list_dto_info.clone()
-            ],
-            &[
-                &[
-                    ReferrerList::get_seed_prefix(),
-                    &stake_pool_info.key.to_bytes()[..],
-                    &program_id.to_bytes()[..],
-                    &[bump_seed],
-                ]
-            ]
+            &[manager_info.clone(), referrer_list_dto_info.clone()],
+            &[&[
+                ReferrerList::get_seed_prefix(),
+                &stake_pool_info.key.to_bytes()[..],
+                &program_id.to_bytes()[..],
+                &[bump_seed],
+            ]],
         )?;
 
         referrer_list.referrers.clear();
@@ -5255,13 +5414,10 @@ impl Processor {
 
     /// Add a referrer to the list of stake pool's referrers
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [AddReferrer](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
-    fn process_add_referrer(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-    ) -> ProgramResult {
+    fn process_add_referrer(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let manager_info = next_account_info(account_info_iter)?;
@@ -5296,7 +5452,10 @@ impl Processor {
         }
 
         let referrer = Referrer::new(*referrer_dto_info.key);
-        if referrer_list.find::<Referrer>(referrer.key.as_ref(), Referrer::memcmp_pubkey).is_some() {
+        if referrer_list
+            .find::<Referrer>(referrer.key.as_ref(), Referrer::memcmp_pubkey)
+            .is_some()
+        {
             return Err(StakePoolError::ReferrerAlreadyAdded.into());
         }
         referrer_list.push(referrer)?;
@@ -5306,13 +5465,10 @@ impl Processor {
 
     /// Add a referrer to the list of stake pool's referrers
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [AddReferrer](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
-    fn process_remove_referrer(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-    ) -> ProgramResult {
+    fn process_remove_referrer(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let manager_info = next_account_info(account_info_iter)?;
@@ -5345,10 +5501,8 @@ impl Processor {
         }
 
         let referrer = Referrer::new(*referrer_dto_info.key);
-        let found = referrer_list.find_mut::<Referrer>(
-                referrer.key.as_ref(),
-                Referrer::memcmp_pubkey,
-            )
+        let found = referrer_list
+            .find_mut::<Referrer>(referrer.key.as_ref(), Referrer::memcmp_pubkey)
             .ok_or(StakePoolError::ReferrerNotFound)?;
         found.key = Pubkey::default();
         referrer_list.retain::<Referrer>(Referrer::is_not_default)?;
@@ -5358,7 +5512,7 @@ impl Processor {
 
     /// Create account for storing MetricsDepositReferrerCounter structure.
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     /// Processes [CreateMetricsDepositReferrerCounter](enum.Instruction.html).
     #[inline(never)] // needed to avoid stack size violation
     fn process_create_metrics_deposit_referrer_counter(
@@ -5381,13 +5535,16 @@ impl Processor {
         }
         stake_pool.check_manager(manager_info)?;
 
-        let (metrics_deposit_referrer_counter_pubkey, bump_seed) = <MetricsDepositReferrerCounter>::find_address(program_id, stake_pool_info.key);
-        if *metrics_deposit_referrer_counter_dto_info.key != metrics_deposit_referrer_counter_pubkey {
+        let (metrics_deposit_referrer_counter_pubkey, bump_seed) =
+            <MetricsDepositReferrerCounter>::find_address(program_id, stake_pool_info.key);
+        if *metrics_deposit_referrer_counter_dto_info.key != metrics_deposit_referrer_counter_pubkey
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
 
-        if !metrics_deposit_referrer_counter_dto_info.data_is_empty() 
-            || metrics_deposit_referrer_counter_dto_info.lamports() != 0 {
+        if !metrics_deposit_referrer_counter_dto_info.data_is_empty()
+            || metrics_deposit_referrer_counter_dto_info.lamports() != 0
+        {
             return Err(StakePoolError::DataAlreadyExists.into());
         }
 
@@ -5407,31 +5564,30 @@ impl Processor {
             ),
             &[
                 manager_info.clone(),
-                metrics_deposit_referrer_counter_dto_info.clone()
+                metrics_deposit_referrer_counter_dto_info.clone(),
             ],
-            &[
-                &[
-                    MetricsDepositReferrerCounter::get_seed_prefix(),
-                    &stake_pool_info.key.to_bytes()[..],
-                    &program_id.to_bytes()[..],
-                    &[bump_seed],
-                ]
-            ]
+            &[&[
+                MetricsDepositReferrerCounter::get_seed_prefix(),
+                &stake_pool_info.key.to_bytes()[..],
+                &program_id.to_bytes()[..],
+                &[bump_seed],
+            ]],
         )?;
 
-        metrics_deposit_referrer_counter.serialize(&mut *metrics_deposit_referrer_counter_dto_info.data.borrow_mut())?;
+        metrics_deposit_referrer_counter
+            .serialize(&mut *metrics_deposit_referrer_counter_dto_info.data.borrow_mut())?;
 
         Ok(())
     }
 
     /// Remove metrics accounts that flushed and not needed anymore
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     #[inline(never)] // needed to avoid stack size violation
     fn process_remove_metrics_deposit_referrer(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
-    ) -> ProgramResult {        
+    ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let manager_info = next_account_info(account_info_iter)?;
@@ -5447,36 +5603,40 @@ impl Processor {
         }
         stake_pool.check_manager(manager_info)?;
 
-        if *metrics_counter_info.key != MetricsDepositReferrerCounter::find_address(program_id, stake_pool_info.key).0 {
+        if *metrics_counter_info.key
+            != MetricsDepositReferrerCounter::find_address(program_id, stake_pool_info.key).0
+        {
             return Err(StakePoolError::InvalidPdaAddress.into());
         }
 
-        if metrics_counter_info.data_is_empty() 
-            || metrics_counter_info.lamports() == 0 {
+        if metrics_counter_info.data_is_empty() || metrics_counter_info.lamports() == 0 {
             return Err(StakePoolError::DataDoesNotExist.into());
         }
 
-        let mut metrics_counter = try_from_slice_unchecked::<MetricsDepositReferrerCounter>(&metrics_counter_info.data.borrow())?;
+        let mut metrics_counter = try_from_slice_unchecked::<MetricsDepositReferrerCounter>(
+            &metrics_counter_info.data.borrow(),
+        )?;
 
         while let Ok(metrics_account) = next_account_info(account_info_iter) {
             check_account_owner(metrics_account, program_id)?;
 
             let metrics_account_pubkey = MetricsDepositReferrer::find_address(
-                program_id, 
+                program_id,
                 stake_pool_info.key,
                 metrics_counter.get_number_of_flushed_accounts(),
-            ).0;
-            
+            )
+            .0;
+
             if *metrics_account.key != metrics_account_pubkey {
                 return Err(StakePoolError::InvalidPdaAddress.into());
-            } 
+            }
 
             let dest_starting_lamports = manager_info.lamports();
             **manager_info.lamports.borrow_mut() = dest_starting_lamports
                 .checked_add(metrics_account.lamports())
                 .unwrap();
             **metrics_account.lamports.borrow_mut() = 0;
-            
+
             let mut metrics_account_data = metrics_account.data.borrow_mut();
             metrics_account_data.fill(0);
 
@@ -5487,10 +5647,9 @@ impl Processor {
         Ok(())
     }
 
-    
     /// Update or create pool token or community token metadata
     /// Сan only be performed by the StakePool manager.
-    /// 
+    ///
     #[inline(never)] // needed to avoid stack size violation
     fn process_update_token_metadata(
         program_id: &Pubkey,
@@ -5498,7 +5657,7 @@ impl Processor {
         name: String,
         symbol: String,
         uri: String,
-    ) -> ProgramResult {        
+    ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let stake_pool_info = next_account_info(account_info_iter)?;
         let manager_info = next_account_info(account_info_iter)?;
@@ -5534,78 +5693,85 @@ impl Processor {
             return Err(StakePoolError::WrongMintingAuthority.into());
         }
 
-        let metadata_key = mpl_token_metadata::pda::find_metadata_account(token_mint_info.key).0;
+        // let metadata_key = mpl_token_metadata::pda::find_metadata_account(token_mint_info.key).0;
 
-        if *metadata_account_info.key != metadata_key {
-            return Err(StakePoolError::InvalidProgramAddress.into());
-        }
+        // if *metadata_account_info.key != metadata_key {
+        //     return Err(StakePoolError::InvalidProgramAddress.into());
+        // }
 
-        let (inst, accs) = if metadata_account_info.data_is_empty() {
-            (mpl_token_metadata::instruction::create_metadata_accounts_v2(
-                mpl_token_metadata::id(), 
-                metadata_key, 
-                *token_mint_info.key, 
-                withdraw_authority_key, 
-                *manager_info.key, 
-                withdraw_authority_key, 
-                name,
-                symbol,
-                uri,
-                None, 
-                0,
-                true, 
-                true,
-                None,
-                None,
-            ), [
-                metadata_account_info.clone(),
-                token_mint_info.clone(),
-                withdraw_authority_info.clone(),
-                manager_info.clone(),
-                withdraw_authority_info.clone(),
-                system_program_info.clone(),
-                rent_info.clone(),
-                mpl_program_info.clone(),
-            ].to_vec()
-            )
-        } else {
-            (mpl_token_metadata::instruction::update_metadata_accounts_v2(
-                mpl_token_metadata::id(), 
-                metadata_key, 
-                withdraw_authority_key, 
-                None, 
-                Some(mpl_token_metadata::state::DataV2 {
-                    name,
-                    symbol,
-                    uri,
-                    seller_fee_basis_points: 0,
-                    creators: None,
-                    collection: None,
-                    uses: None,
-                }), 
-                None,
-                None
-            ), [
-                metadata_account_info.clone(),
-                withdraw_authority_info.clone(),
-            ].to_vec())
-        };
+        // let (inst, accs) = if metadata_account_info.data_is_empty() {
+        //     (
+        //         mpl_token_metadata::instruction::create_metadata_accounts_v2(
+        //             mpl_token_metadata::id(),
+        //             metadata_key,
+        //             *token_mint_info.key,
+        //             withdraw_authority_key,
+        //             *manager_info.key,
+        //             withdraw_authority_key,
+        //             name,
+        //             symbol,
+        //             uri,
+        //             None,
+        //             0,
+        //             true,
+        //             true,
+        //             None,
+        //             None,
+        //         ),
+        //         [
+        //             metadata_account_info.clone(),
+        //             token_mint_info.clone(),
+        //             withdraw_authority_info.clone(),
+        //             manager_info.clone(),
+        //             withdraw_authority_info.clone(),
+        //             system_program_info.clone(),
+        //             rent_info.clone(),
+        //             mpl_program_info.clone(),
+        //         ]
+        //         .to_vec(),
+        //     )
+        // } else {
+        //     (
+        //         mpl_token_metadata::instructions::update_metadata_accounts_v2(
+        //             mpl_token_metadata::id(),
+        //             metadata_key,
+        //             withdraw_authority_key,
+        //             None,
+        //             Some(mpl_token_metadata::state::DataV2 {
+        //                 name,
+        //                 symbol,
+        //                 uri,
+        //                 seller_fee_basis_points: 0,
+        //                 creators: None,
+        //                 collection: None,
+        //                 uses: None,
+        //             }),
+        //             None,
+        //             None,
+        //         ),
+        //         [
+        //             metadata_account_info.clone(),
+        //             withdraw_authority_info.clone(),
+        //         ]
+        //         .to_vec(),
+        //     )
+        // };
 
         let me_bytes = stake_pool_info.key.to_bytes();
-        let authority_signature_seeds = [&me_bytes[..32], AUTHORITY_WITHDRAW, &[withdraw_authority_bump]];
+        let authority_signature_seeds = [
+            &me_bytes[..32],
+            AUTHORITY_WITHDRAW,
+            &[withdraw_authority_bump],
+        ];
         let signers = &[&authority_signature_seeds[..]];
 
-        invoke_signed(
-            &inst, 
-            &accs,
-            signers,
-        )?;
+        // invoke_signed(&inst, &accs, signers)?;
 
         Ok(())
     }
 
     /// Router-processor for methods.
-    /// 
+    ///
     /// Processes [Instruction](enum.Instruction.html).
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = StakePoolInstruction::try_from_slice(input)?;
@@ -5688,9 +5854,15 @@ impl Processor {
                     no_merge,
                 )
             }
-            StakePoolInstruction::UpdateStakePoolBalance(max_validator_yield_per_epoch_numerator) => {
+            StakePoolInstruction::UpdateStakePoolBalance(
+                max_validator_yield_per_epoch_numerator,
+            ) => {
                 msg!("Instruction: UpdateStakePoolBalance");
-                Self::process_update_stake_pool_balance(program_id, accounts, max_validator_yield_per_epoch_numerator)
+                Self::process_update_stake_pool_balance(
+                    program_id,
+                    accounts,
+                    max_validator_yield_per_epoch_numerator,
+                )
             }
             StakePoolInstruction::CleanupRemovedValidatorEntries => {
                 msg!("Instruction: CleanupRemovedValidatorEntries");
@@ -5736,19 +5908,15 @@ impl Processor {
                 msg!("Instruction: WithdrawLiquiditySol");
                 Self::process_withdraw_liquidity_sol(program_id, accounts, lamports)
             }
-            StakePoolInstruction::CreateCommunityToken {
-                token_mint,
-            } => {
+            StakePoolInstruction::CreateCommunityToken { token_mint } => {
                 msg!("Instruction: CreateCommunityToken");
                 Self::process_create_community_token(program_id, accounts, token_mint)
             }
             StakePoolInstruction::CreateCommunityTokensCounter => {
                 msg!("Instruction: CreateCommunityTokensCounter");
                 Self::process_create_community_tokens_counter(program_id, accounts)
-            }        
-            StakePoolInstruction::CreateDaoState {
-                is_enabled,
-            } => {
+            }
+            StakePoolInstruction::CreateDaoState { is_enabled } => {
                 msg!("Instruction: CreateDaoState");
                 Self::process_create_dao_state(program_id, accounts, is_enabled)
             }
@@ -5778,7 +5946,7 @@ impl Processor {
             }
             StakePoolInstruction::MintCommunityToken {
                 amount,
-                current_epoch
+                current_epoch,
             } => {
                 msg!("Instruction: MintCommunityToken");
                 Self::process_mint_community_token(program_id, accounts, amount, current_epoch)
@@ -5791,15 +5959,15 @@ impl Processor {
                 msg!("Instruction: MergeInactiveStake");
                 Self::process_merge_inactive_stake(program_id, accounts)
             }
-            StakePoolInstruction::CreateReferrerList(max_referrers) =>  {
+            StakePoolInstruction::CreateReferrerList(max_referrers) => {
                 msg!("Instruction: CreateReferrerList");
                 Self::process_create_referrer_list(program_id, accounts, max_referrers)
             }
-            StakePoolInstruction::AddReferrer =>  {
+            StakePoolInstruction::AddReferrer => {
                 msg!("Instruction: AddReferrer");
                 Self::process_add_referrer(program_id, accounts)
             }
-            StakePoolInstruction::RemoveReferrer =>  {
+            StakePoolInstruction::RemoveReferrer => {
                 msg!("Instruction: RemoveReferrer");
                 Self::process_remove_referrer(program_id, accounts)
             }
@@ -5810,23 +5978,29 @@ impl Processor {
             }
             StakePoolInstruction::DaoStrategyDepositSolWithReferrer2(lamports) => {
                 msg!("Instruction: DaoStrategyDepositSolWithReferrer2");
-                Self::process_dao_strategy_deposit_sol_with_referrer2(program_id, accounts, lamports)
+                Self::process_dao_strategy_deposit_sol_with_referrer2(
+                    program_id, accounts, lamports,
+                )
             }
             StakePoolInstruction::CreateMetricsDepositReferrerCounter => {
                 msg!("Instruction: CreateMetricsDepositReferrerCounter");
                 Self::process_create_metrics_deposit_referrer_counter(program_id, accounts)
-            } 
+            }
             StakePoolInstruction::RemoveMetricsDepositReferrer => {
                 msg!("Instruction: RemoveMetricsDepositReferrer");
                 Self::process_remove_metrics_deposit_referrer(program_id, accounts)
-            }  
+            }
             StakePoolInstruction::UpdateTokenMetadata { name, symbol, uri } => {
                 msg!("Instruction: UpdateTokenMetadata");
                 Self::process_update_token_metadata(program_id, accounts, name, symbol, uri)
             }
             StakePoolInstruction::SetNoFeeDepositThreshold(no_fee_deposit_threshold) => {
                 msg!("Instruction: SetNoFeeDepositThreshold");
-                Self::process_set_no_fee_deposit_threshold(program_id, accounts, no_fee_deposit_threshold)
+                Self::process_set_no_fee_deposit_threshold(
+                    program_id,
+                    accounts,
+                    no_fee_deposit_threshold,
+                )
             }
             StakePoolInstruction::SetTreasuryFeeAccount() => {
                 msg!("Instruction: SetTreasuryFeeAccount");

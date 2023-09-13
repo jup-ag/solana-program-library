@@ -257,7 +257,7 @@ pub enum StakePoolInstruction {
     ///   6. `[w]` Pool mint account
     ///   7. `[w]` Account to receive treasury fee tokens
     ///   8. `[]` Pool token program
-    /// 
+    ///
     ///   userdata: max_validator_yield_per_epoch_numerator
     UpdateStakePoolBalance(u32),
 
@@ -387,7 +387,7 @@ pub enum StakePoolInstruction {
     ///  11. `[]` Token program id
     ///  12. `[s]` (Optional) Stake pool sol withdraw authority
     WithdrawSol(u64),
-    
+
     ///   Deposit SOL directly into the pool's reserve account to increase liquidity
     ///
     ///   0. `[w]` Stake pool
@@ -483,7 +483,7 @@ pub enum StakePoolInstruction {
     ///  11. `[]` Stake program account
     ///  12. `[]` Token program id
     ///  13. `[w]` Account for storing community token staking rewards dto
-    ///  14. `[s]` Owner wallet 
+    ///  14. `[s]` Owner wallet
     ///  15. `[]` Account for storing community token
     ///  16. `[s]` (Optional) Stake pool sol withdraw authority
     DaoStrategyWithdrawSol(u64),
@@ -523,7 +523,7 @@ pub enum StakePoolInstruction {
     ///  14. `[w]` Account for storing community token staking rewards dto
     ///  15. `[s]` Owner wallet
     ///  16. `[]` Account for storing community token dto
-    /// 
+    ///
     ///  userdata: amount of pool tokens to withdraw
     DaoStrategyWithdrawStake(u64),
 
@@ -564,7 +564,7 @@ pub enum StakePoolInstruction {
     ///   Currenty, we mint tokens for EVS DAO Reserve, which contains up to 75% of community tokens max supply
     ///   The strategy for EVS Strategic Reserve, which contains up to 25% of community tokens max supply, is not implemented yet
     ///   The community tokens counter and its limits are implemented using CommunityTokensCounter structure
-    /// 
+    ///
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[]` User wallet
@@ -583,14 +583,14 @@ pub enum StakePoolInstruction {
         amount: u64,
         /// Current epoch
         #[allow(dead_code)] // but it's not
-        current_epoch: u64
+        current_epoch: u64,
     },
 
     ///   Create account for community tokens counter
     ///   It comprises of two separate counters: EVS DAO Reserve and EVS Strategic Reserve
     ///   EVS DAO reserve can hold up to 75% of max tokens supply
     ///   EVS Strategic reserve can hold up to 25% of max tokens supply
-    /// 
+    ///
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[w]` Account for community tokens counter
@@ -601,7 +601,7 @@ pub enum StakePoolInstruction {
 
     ///   Delete account for storing information for DAO`s community tokens destribution strategy
     ///   0. `[]` Stake pool
-    ///   1. `[s]` Manager 
+    ///   1. `[s]` Manager
     ///   2. '[]' User wallet
     ///   3. `[w]` Account storing community token staking rewards dto
     ///   4. '[]' Pool mint
@@ -621,18 +621,18 @@ pub enum StakePoolInstruction {
     MergeInactiveStake,
 
     ///   Create account for pool's referrer list
-    /// 
+    ///
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[w]` Account for pool's referrer list
     ///   3. `[]` Rent sysvar
-    ///   4. `[]` System program account 
-    /// 
+    ///   4. `[]` System program account
+    ///
     ///   userdata: maximum number of referrers in the list  
     CreateReferrerList(u32),
 
     ///   Add a referrer to the pool's referrer list
-    /// 
+    ///
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[w]` Account for pool's referrer list
@@ -665,7 +665,7 @@ pub enum StakePoolInstruction {
     DaoStrategyDepositSolWithReferrer(u64),
 
     ///   Remove a referrer from the pool's referrer list
-    /// 
+    ///
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[w]` Account for pool's referrer list
@@ -682,25 +682,25 @@ pub enum StakePoolInstruction {
 
     ///   Remove metrics accounts of deposit sol transactions with referrer
     ///   We don't need metrics flushed to DB
-    /// 
+    ///
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[w]` Account for storing counter for metrics of deposit sol transactions with referrer
     ///   3. `[]` System program account
     ///   4. `[w]` Metrics account
     ///   5.. `[w]` (Optional) Metrics accounts
-    /// 
+    ///
     RemoveMetricsDepositReferrer,
 
     ///   Update or Create token metadata
-    /// 
+    ///
     ///   0. `[]` Stake pool
     ///   1. `[s]` Manager
     ///   2. `[]` Mint (withdraw) authority (Community token or Pool token mint authority)
     ///   3. `[]` Token mint (Community token or Pool token mint)
     ///   4. `[]` Rent sysvar
     ///   5. `[]` System program account
-    /// 
+    ///
     UpdateTokenMetadata {
         #[allow(dead_code)] // but it's not
         /// token name
@@ -712,13 +712,12 @@ pub enum StakePoolInstruction {
         #[allow(dead_code)] // but it's not
         uri: String,
     },
-    
 
     /// (Manager only) No fee deposit threshold
     ///
     ///  0. `[w]` StakePool
     ///  1. `[s]` Manager
-    /// 
+    ///
     /// userdata: threshold
     SetNoFeeDepositThreshold(u16),
 
@@ -743,7 +742,7 @@ pub enum StakePoolInstruction {
     ///  14. `[]` Account for storing community token dto
     ///  15. `[s]` (Optional) Stake pool sol deposit authority.
     //
-    // Index 39 
+    // Index 39
     DaoStrategyDepositSolWithReferrer2(u64),
 
     /// (Manager only) Treasury fee account
@@ -1645,9 +1644,9 @@ pub fn set_no_fee_deposit_threshold(
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::SetNoFeeDepositThreshold(
-            no_fee_deposit_threshold
-        ).try_to_vec().unwrap(),
+        data: StakePoolInstruction::SetNoFeeDepositThreshold(no_fee_deposit_threshold)
+            .try_to_vec()
+            .unwrap(),
     }
 }
 
@@ -1666,7 +1665,9 @@ pub fn set_treasury_fee_account(
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::SetTreasuryFeeAccount().try_to_vec().unwrap(),
+        data: StakePoolInstruction::SetTreasuryFeeAccount()
+            .try_to_vec()
+            .unwrap(),
     }
 }
 
@@ -1849,7 +1850,7 @@ pub fn create_community_token(
         AccountMeta::new(*dao_state_dto, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
-    ]; 
+    ];
 
     Instruction {
         program_id: *program_id,
@@ -1857,8 +1858,8 @@ pub fn create_community_token(
         data: StakePoolInstruction::CreateCommunityToken {
             token_mint: *token_mint,
         }
-            .try_to_vec()
-            .unwrap(),
+        .try_to_vec()
+        .unwrap(),
     }
 }
 
@@ -1877,7 +1878,7 @@ pub fn create_community_tokens_counter(
         AccountMeta::new_readonly(*community_token_dto, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
-    ]; 
+    ];
 
     Instruction {
         program_id: *program_id,
@@ -1902,14 +1903,12 @@ pub fn create_dao_state(
         AccountMeta::new(*dao_state_dto, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
-    ]; 
+    ];
 
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::CreateDaoState { 
-            is_enabled,
-        }
+        data: StakePoolInstruction::CreateDaoState { is_enabled }
             .try_to_vec()
             .unwrap(),
     }
@@ -1930,8 +1929,8 @@ pub fn create_community_token_staking_rewards(
         AccountMeta::new(*community_token_staking_rewards_counter_dto, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
-    ]; 
-    
+    ];
+
     Instruction {
         program_id: *program_id,
         accounts,
@@ -2130,7 +2129,7 @@ pub fn dao_strategy_deposit_sol_with_authority(
 /// This instructions is a part of our Referral program and must include a whitelisted referral.
 /// The difference with `deposit_sol_with_referrer()` is that a deposit
 /// authority must sign this instruction.
-/// 
+///
 pub fn dao_strategy_deposit_sol_with_authority_and_referrer(
     program_id: &Pubkey,
     stake_pool: &Pubkey,
@@ -2186,7 +2185,7 @@ pub fn dao_strategy_deposit_sol_with_authority_and_referrer(
 /// This instructions is a part of our Referral program and must include a whitelisted referral.
 /// The difference with `deposit_sol_with_referrer2()` is that a deposit
 /// authority must sign this instruction.
-/// 
+///
 pub fn dao_strategy_deposit_sol_with_authority_and_referrer2(
     program_id: &Pubkey,
     stake_pool: &Pubkey,
@@ -2272,7 +2271,7 @@ pub fn dao_strategy_withdraw_sol(
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction:: DaoStrategyWithdrawSol(pool_tokens)
+        data: StakePoolInstruction::DaoStrategyWithdrawSol(pool_tokens)
             .try_to_vec()
             .unwrap(),
     }
@@ -2437,7 +2436,9 @@ pub fn dao_strategy_deposit_stake(
         Instruction {
             program_id: *program_id,
             accounts,
-            data: StakePoolInstruction::DaoStrategyDepositStake.try_to_vec().unwrap(),
+            data: StakePoolInstruction::DaoStrategyDepositStake
+                .try_to_vec()
+                .unwrap(),
         },
     ]
 }
@@ -2504,7 +2505,9 @@ pub fn dao_strategy_deposit_stake_with_authority(
         Instruction {
             program_id: *program_id,
             accounts,
-            data: StakePoolInstruction::DaoStrategyDepositStake.try_to_vec().unwrap(),
+            data: StakePoolInstruction::DaoStrategyDepositStake
+                .try_to_vec()
+                .unwrap(),
         },
     ]
 }
@@ -2524,7 +2527,7 @@ pub fn create_community_token_staking_rewards_counter(
         AccountMeta::new_readonly(*community_token_dto, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
-    ]; 
+    ];
 
     Instruction {
         program_id: *program_id,
@@ -2535,7 +2538,7 @@ pub fn create_community_token_staking_rewards_counter(
     }
 }
 
-/// Creates instruction required to create account for 
+/// Creates instruction required to create account for
 /// storing counter metrics of deposit sol transactions with referrer
 pub fn create_metrics_deposit_referrer_counter(
     program_id: &Pubkey,
@@ -2549,7 +2552,7 @@ pub fn create_metrics_deposit_referrer_counter(
         AccountMeta::new(*metrics_deposit_referrer_counter_dto, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
-    ]; 
+    ];
 
     Instruction {
         program_id: *program_id,
@@ -2574,7 +2577,7 @@ pub fn mint_community_token(
     community_token_staking_rewards_dto: &Pubkey,
     token_program_id: &Pubkey,
     amount: u64,
-    current_epoch: u64
+    current_epoch: u64,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta::new_readonly(*stake_pool, false),
@@ -2595,10 +2598,10 @@ pub fn mint_community_token(
         accounts,
         data: StakePoolInstruction::MintCommunityToken {
             amount,
-            current_epoch
+            current_epoch,
         }
-            .try_to_vec()
-            .unwrap(),
+        .try_to_vec()
+        .unwrap(),
     }
 }
 
@@ -2620,8 +2623,8 @@ pub fn delete_community_token_staking_rewards(
         AccountMeta::new_readonly(*pool_mint, false),
         AccountMeta::new_readonly(*user_pool_token_account, false),
         AccountMeta::new_readonly(system_program::ID, false),
-    ]; 
-    
+    ];
+
     Instruction {
         program_id: *program_id,
         accounts,
@@ -2649,8 +2652,8 @@ pub fn merge_inactive_stake(
         AccountMeta::new_readonly(sysvar::clock::id(), false),
         AccountMeta::new_readonly(sysvar::stake_history::id(), false),
         AccountMeta::new_readonly(stake::program::id(), false),
-    ]; 
-    
+    ];
+
     Instruction {
         program_id: *program_id,
         accounts,
@@ -2675,11 +2678,11 @@ pub fn remove_metrics_deposit_referrer(
         AccountMeta::new(*metrics_deposit_referrer_counter, false),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
-    
+
     for metrics_deposit_referrer_key in metrics_deposit_referrer_keys {
         accounts.push(AccountMeta::new(metrics_deposit_referrer_key, false))
     }
-    
+
     Instruction {
         program_id: *program_id,
         accounts,
@@ -2703,7 +2706,7 @@ pub fn create_referrer_list(
         AccountMeta::new(*referrer_list, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(system_program::ID, false),
-    ]; 
+    ];
 
     Instruction {
         program_id: *program_id,
@@ -2726,15 +2729,13 @@ pub fn add_referrer(
         AccountMeta::new_readonly(*stake_pool, false),
         AccountMeta::new_readonly(*manager, true),
         AccountMeta::new(*referrer_list, false),
-        AccountMeta::new_readonly(*referrer, false),        
-    ]; 
+        AccountMeta::new_readonly(*referrer, false),
+    ];
 
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::AddReferrer
-            .try_to_vec()
-            .unwrap(),
+        data: StakePoolInstruction::AddReferrer.try_to_vec().unwrap(),
     }
 }
 
@@ -2756,9 +2757,7 @@ pub fn remove_referrer(
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::RemoveReferrer
-            .try_to_vec()
-            .unwrap(),
+        data: StakePoolInstruction::RemoveReferrer.try_to_vec().unwrap(),
     }
 }
 
@@ -2780,20 +2779,20 @@ pub fn update_token_metadata(
         AccountMeta::new_readonly(*stake_pool_withdraw_authority, false),
         AccountMeta::new_readonly(*token_mint, false),
         AccountMeta::new(*metadata_key, false),
-        AccountMeta::new_readonly(system_program::ID, false), 
+        AccountMeta::new_readonly(system_program::ID, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
-        AccountMeta::new_readonly(mpl_token_metadata::id(), false),
+        AccountMeta::new_readonly(mpl_token_metadata::ID, false),
     ];
 
     Instruction {
         program_id: *program_id,
         accounts,
-        data: StakePoolInstruction::UpdateTokenMetadata { 
+        data: StakePoolInstruction::UpdateTokenMetadata {
             name: name.to_string(),
             symbol: symbol.to_string(),
-            uri: uri.to_string() 
+            uri: uri.to_string(),
         }
-            .try_to_vec()
-            .unwrap(),
+        .try_to_vec()
+        .unwrap(),
     }
 }
