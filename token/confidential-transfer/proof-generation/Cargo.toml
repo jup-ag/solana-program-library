@@ -9,7 +9,7 @@ edition = "2021"
 
 [dependencies]
 curve25519-dalek = "3.2.1"
-solana-zk-sdk = "2.0.3"
+solana-zk-sdk = "~2"
 thiserror = "1.0.65"
 
 [dev-dependencies]

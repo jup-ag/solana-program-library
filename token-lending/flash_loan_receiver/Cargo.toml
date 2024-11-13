@@ -5,8 +5,10 @@ edition = "2021"
 
 [dependencies]
 arrayref = "0.3.9"
-solana-program = "2.0.3"
-spl-token = { version = "6.0", path = "../../token/program", features=["no-entrypoint"] }
+solana-program = "~2"
+spl-token = { version = "6.0", path = "../../token/program", features = [
+    "no-entrypoint",
+] }
 
 [lib]
 crate-type = ["cdylib", "lib"]
